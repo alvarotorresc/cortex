@@ -1,0 +1,14 @@
+{
+  "id": "quick-notes",
+  "name": "Quick Notes",
+  "version": "0.1.0",
+  "author": "alvarotorresc",
+  "description": "Capture ideas and notes quickly, local and private",
+  "icon": "notebook-pen",
+  "color": "#6366F1",
+  "permissions": ["db:read", "db:write"],
+  "slots": {
+    "dashboard-widget": true,
+    "full-page": true
+  }
+}
