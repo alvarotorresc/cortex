@@ -1,0 +1,51 @@
+# Go binaries
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Go test artifacts
+*.test
+*.out
+coverage.txt
+coverage.html
+
+# Go build cache
+vendor/
+
+# Runtime data
+data/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Frontend build output (SvelteKit)
+frontend/build/
+frontend/node_modules/
+frontend/.svelte-kit/
+
+# Plugin binaries (installed at runtime)
+plugins/*/plugin
+plugins/*/db.sqlite
+
+# Prototypes (design phase artifacts, not production code)
+docs/prototypes/
+
+# Temporary files
+tmp/
+*.tmp
