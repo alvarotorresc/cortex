@@ -1,0 +1,66 @@
+{
+  "nav": {
+    "home": "Home",
+    "settings": "Settings"
+  },
+  "dashboard": {
+    "title": "Dashboard",
+    "customize": "Customize",
+    "save": "Save layout",
+    "cancel": "Cancel",
+    "empty": {
+      "title": "No widgets yet",
+      "description": "Install plugins to see their widgets here."
+    }
+  },
+  "settings": {
+    "title": "Settings",
+    "plugins": "Installed Plugins",
+    "version": "Version",
+    "status": {
+      "running": "Running",
+      "stopped": "Stopped"
+    },
+    "uninstall": "Uninstall",
+    "noPlugins": {
+      "title": "No plugins installed",
+      "description": "Place plugin directories in the plugins folder to get started."
+    }
+  },
+  "finance": {
+    "title": "Finance Tracker",
+    "addTransaction": "Add Transaction",
+    "amount": "Amount",
+    "type": "Type",
+    "income": "Income",
+    "expense": "Expense",
+    "category": "Category",
+    "description": "Description",
+    "date": "Date",
+    "save": "Save",
+    "delete": "Delete",
+    "summary": "Monthly Summary",
+    "balance": "Balance",
+    "noTransactions": "No transactions this month."
+  },
+  "notes": {
+    "title": "Quick Notes",
+    "newNote": "New Note",
+    "titleField": "Title",
+    "content": "Content",
+    "save": "Save",
+    "delete": "Delete",
+    "pin": "Pin",
+    "unpin": "Unpin",
+    "noNotes": "No notes yet. Create your first one."
+  },
+  "common": {
+    "loading": "Loading...",
+    "error": "Something went wrong. Try again.",
+    "retry": "Retry"
+  },
+  "footer": {
+    "madeWith": "Made with",
+    "by": "by"
+  }
+}

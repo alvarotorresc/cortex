@@ -1,0 +1,66 @@
+{
+  "nav": {
+    "home": "Inicio",
+    "settings": "Ajustes"
+  },
+  "dashboard": {
+    "title": "Dashboard",
+    "customize": "Personalizar",
+    "save": "Guardar layout",
+    "cancel": "Cancelar",
+    "empty": {
+      "title": "Sin widgets todavia",
+      "description": "Instala plugins para ver sus widgets aqui."
+    }
+  },
+  "settings": {
+    "title": "Ajustes",
+    "plugins": "Plugins Instalados",
+    "version": "Version",
+    "status": {
+      "running": "Activo",
+      "stopped": "Detenido"
+    },
+    "uninstall": "Desinstalar",
+    "noPlugins": {
+      "title": "Sin plugins instalados",
+      "description": "Coloca directorios de plugins en la carpeta plugins para empezar."
+    }
+  },
+  "finance": {
+    "title": "Finanzas",
+    "addTransaction": "Agregar transaccion",
+    "amount": "Cantidad",
+    "type": "Tipo",
+    "income": "Ingreso",
+    "expense": "Gasto",
+    "category": "Categoria",
+    "description": "Descripcion",
+    "date": "Fecha",
+    "save": "Guardar",
+    "delete": "Eliminar",
+    "summary": "Resumen Mensual",
+    "balance": "Balance",
+    "noTransactions": "Sin transacciones este mes."
+  },
+  "notes": {
+    "title": "Notas Rapidas",
+    "newNote": "Nueva Nota",
+    "titleField": "Titulo",
+    "content": "Contenido",
+    "save": "Guardar",
+    "delete": "Eliminar",
+    "pin": "Fijar",
+    "unpin": "Desfijar",
+    "noNotes": "Sin notas todavia. Crea tu primera nota."
+  },
+  "common": {
+    "loading": "Cargando...",
+    "error": "Algo salio mal. Intenta de nuevo.",
+    "retry": "Reintentar"
+  },
+  "footer": {
+    "madeWith": "Hecho con",
+    "by": "por"
+  }
+}
