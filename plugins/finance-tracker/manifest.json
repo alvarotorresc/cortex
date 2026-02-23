@@ -1,0 +1,14 @@
+{
+  "id": "finance-tracker",
+  "name": "Finance Tracker",
+  "version": "0.1.0",
+  "author": "alvarotorresc",
+  "description": "Track income and expenses, local and private",
+  "icon": "wallet",
+  "color": "#10B981",
+  "permissions": ["db:read", "db:write"],
+  "slots": {
+    "dashboard-widget": true,
+    "full-page": true
+  }
+}
