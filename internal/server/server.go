@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/alvarotorresc/cortex/internal/config"
+	"github.com/alvarotorresc/cortex/internal/db"
+	"github.com/alvarotorresc/cortex/internal/plugin"
 )
 
 const (
@@ -23,8 +25,8 @@ const (
 // Start initializes and runs the HTTP server with graceful shutdown.
 // It blocks until a termination signal is received (SIGINT or SIGTERM),
 // then gracefully shuts down the server.
-func Start(cfg *config.Config) error {
-	router := NewRouter()
+func Start(cfg *config.Config, registry *plugin.Registry, hostDB *db.HostDB) error {
+	router := NewRouter(cfg, registry, hostDB)
 
 	server := &http.Server{
 		Addr:         cfg.Address(),
