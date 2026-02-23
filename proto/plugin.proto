@@ -1,0 +1,55 @@
+syntax = "proto3";
+
+package cortexplugin;
+
+option go_package = "github.com/alvarotorresc/cortex/internal/plugin/proto";
+
+message Empty {}
+
+message PluginManifest {
+  string id = 1;
+  string name = 2;
+  string version = 3;
+  string description = 4;
+  string icon = 5;
+  string color = 6;
+  repeated string permissions = 7;
+}
+
+message APIRequest {
+  string method = 1;
+  string path = 2;
+  bytes body = 3;
+  map<string, string> query = 4;
+}
+
+message APIResponse {
+  int32 status_code = 1;
+  bytes body = 2;
+  string content_type = 3;
+}
+
+message WidgetRequest {
+  string slot = 1;
+}
+
+message WidgetData {
+  bytes json_data = 1;
+}
+
+message MigrateRequest {
+  string db_path = 1;
+}
+
+message MigrateResult {
+  bool success = 1;
+  string message = 2;
+}
+
+service CortexPlugin {
+  rpc GetManifest(Empty) returns (PluginManifest);
+  rpc HandleAPI(APIRequest) returns (APIResponse);
+  rpc GetWidgetData(WidgetRequest) returns (WidgetData);
+  rpc Migrate(MigrateRequest) returns (MigrateResult);
+  rpc Teardown(Empty) returns (Empty);
+}
