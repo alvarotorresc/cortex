@@ -1,0 +1,11 @@
+services:
+  cortex:
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - cortex-data:/data
+    restart: unless-stopped
+
+volumes:
+  cortex-data:

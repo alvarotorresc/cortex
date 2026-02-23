@@ -1,0 +1,49 @@
+# Version control
+.git
+.github
+
+# Runtime data (generated, not needed for build)
+data/
+
+# Frontend build artifacts (rebuilt in Docker)
+frontend/node_modules/
+frontend/.svelte-kit/
+frontend/build/
+
+# Go build artifacts
+bin/
+vendor/
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Plugin compiled binaries (rebuilt in Docker)
+plugins/*/plugin
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Documentation and design (not needed for build)
+docs/
+*.md
+LICENSE
+
+# Temporary files
+tmp/
+*.tmp
