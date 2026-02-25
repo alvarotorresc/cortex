@@ -5,9 +5,17 @@
   import Trash2 from 'lucide-svelte/icons/trash-2';
   import Pin from 'lucide-svelte/icons/pin';
   import PinOff from 'lucide-svelte/icons/pin-off';
-  import StickyNote from 'lucide-svelte/icons/sticky-note';
+  import NotebookPen from 'lucide-svelte/icons/notebook-pen';
   import FileText from 'lucide-svelte/icons/file-text';
+  import ArrowUpDown from 'lucide-svelte/icons/arrow-up-down';
   import { pluginApi } from '$lib/api';
+
+  type SortOption =
+    | 'created-newest'
+    | 'created-oldest'
+    | 'updated-newest'
+    | 'updated-oldest'
+    | 'title-az';
 
   interface Note {
     id: string;
@@ -24,16 +32,33 @@
   let loading = $state(true);
   let error = $state<string | null>(null);
   let saving = $state(false);
+  let isDirty = $state(false);
 
   let selectedNoteId = $state<string | null>(null);
   let editTitle = $state('');
   let editContent = $state('');
   let deleteConfirmId = $state<string | null>(null);
+  let sortBy = $state<SortOption>('created-newest');
+
+  function compareBySortOption(a: Note, b: Note): number {
+    switch (sortBy) {
+      case 'created-newest':
+        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+      case 'created-oldest':
+        return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+      case 'updated-newest':
+        return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
+      case 'updated-oldest':
+        return new Date(a.updated_at).getTime() - new Date(b.updated_at).getTime();
+      case 'title-az':
+        return a.title.localeCompare(b.title);
+    }
+  }
 
   const sortedNotes = $derived(
     [...notes].sort((a, b) => {
       if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
-      return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
+      return compareBySortOption(a, b);
     }),
   );
 
@@ -54,6 +79,7 @@
   }
 
   function selectNote(note: Note) {
+    flushSave();
     selectedNoteId = note.id;
     editTitle = note.title;
     editContent = note.content;
@@ -80,14 +106,21 @@
 
   async function saveNote() {
     if (!selectedNoteId) return;
+    if (!isDirty) return;
 
+    isDirty = false;
     saving = true;
     try {
       await api.fetch(`/notes/${selectedNoteId}`, {
         method: 'PUT',
         body: JSON.stringify({ title: editTitle, content: editContent }),
       });
-      await loadNotes();
+      const now = new Date().toISOString();
+      notes = notes.map((n) =>
+        n.id === selectedNoteId
+          ? { ...n, title: editTitle, content: editContent, updated_at: now }
+          : n,
+      );
     } catch (err) {
       error = err instanceof Error ? err.message : 'Failed to save note';
     } finally {
@@ -122,10 +155,21 @@
   let saveTimeout: ReturnType<typeof setTimeout> | null = null;
 
   function handleEditorInput() {
+    isDirty = true;
     if (saveTimeout) clearTimeout(saveTimeout);
     saveTimeout = setTimeout(() => {
       saveNote();
     }, 1000);
+  }
+
+  function flushSave() {
+    if (saveTimeout) {
+      clearTimeout(saveTimeout);
+      saveTimeout = null;
+    }
+    if (isDirty) {
+      saveNote();
+    }
   }
 
   function formatDate(dateStr: string): string {
@@ -146,7 +190,7 @@
   <!-- Header -->
   <div class="flex items-center justify-between">
     <div class="flex items-center gap-3">
-      <StickyNote size={20} class="text-[var(--color-plugin-notes)]" />
+      <NotebookPen size={20} class="text-[var(--color-plugin-notes)]" />
       <h2 class="text-2xl font-semibold text-[var(--color-text-primary)]">
         {$t('notes.title')}
       </h2>
@@ -193,9 +237,27 @@
   {:else}
     <div class="grid grid-cols-1 gap-4 lg:grid-cols-3">
       <!-- Notes list -->
-      <div
-        class="divide-y divide-[var(--color-border)] overflow-y-auto rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-bg-secondary)] lg:max-h-[calc(100vh-240px)]"
-      >
+      <div class="flex flex-col gap-2">
+        <!-- Sort dropdown -->
+        <div class="flex items-center gap-2">
+          <ArrowUpDown size={14} class="shrink-0 text-[var(--color-text-tertiary)]" />
+          <label for="notes-sort" class="sr-only">{$t('notes.sortBy')}</label>
+          <select
+            id="notes-sort"
+            bind:value={sortBy}
+            class="w-full cursor-pointer rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-bg-secondary)] px-3 py-1.5 text-xs text-[var(--color-text-secondary)] transition-colors hover:border-[var(--color-text-tertiary)] focus:border-[var(--color-brand-blue)] focus:outline-none"
+          >
+            <option value="created-newest">{$t('notes.sortCreatedNewest')}</option>
+            <option value="created-oldest">{$t('notes.sortCreatedOldest')}</option>
+            <option value="updated-newest">{$t('notes.sortUpdatedNewest')}</option>
+            <option value="updated-oldest">{$t('notes.sortUpdatedOldest')}</option>
+            <option value="title-az">{$t('notes.sortTitleAz')}</option>
+          </select>
+        </div>
+
+        <div
+          class="divide-y divide-[var(--color-border)] overflow-y-auto rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-bg-secondary)] lg:max-h-[calc(100vh-280px)]"
+        >
         {#each sortedNotes as note}
           <button
             onclick={() => selectNote(note)}
@@ -226,6 +288,7 @@
             </span>
           </button>
         {/each}
+        </div>
       </div>
 
       <!-- Editor -->
@@ -281,8 +344,9 @@
               </div>
 
               {#if saving}
-                <span class="text-xs text-[var(--color-text-tertiary)]">
-                  {$t('common.loading')}
+                <span class="flex items-center gap-1.5 text-xs text-[var(--color-text-tertiary)]">
+                  <span class="saving-dot inline-block h-1.5 w-1.5 rounded-[var(--radius-full)] bg-[var(--color-text-tertiary)]"></span>
+                  {$t('notes.saving')}
                 </span>
               {/if}
             </div>
@@ -292,6 +356,7 @@
               type="text"
               bind:value={editTitle}
               oninput={handleEditorInput}
+              onblur={flushSave}
               class="border-b border-[var(--color-border)] bg-transparent px-6 py-3 text-lg font-semibold text-[var(--color-text-primary)] placeholder:text-[var(--color-text-tertiary)] focus:outline-none"
               placeholder={$t('notes.titleField')}
             />
@@ -300,6 +365,7 @@
             <textarea
               bind:value={editContent}
               oninput={handleEditorInput}
+              onblur={flushSave}
               class="min-h-[300px] flex-1 resize-none bg-transparent px-6 py-4 text-sm leading-relaxed text-[var(--color-text-primary)] placeholder:text-[var(--color-text-tertiary)] focus:outline-none"
               placeholder={$t('notes.content')}
             ></textarea>
@@ -317,3 +383,19 @@
     </div>
   {/if}
 </div>
+
+<style>
+  .saving-dot {
+    animation: saving-pulse 1s ease-in-out infinite;
+  }
+
+  @keyframes saving-pulse {
+    0%,
+    100% {
+      opacity: 0.3;
+    }
+    50% {
+      opacity: 1;
+    }
+  }
+</style>
