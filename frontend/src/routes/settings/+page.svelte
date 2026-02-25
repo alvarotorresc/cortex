@@ -4,7 +4,8 @@
   import Trash2 from 'lucide-svelte/icons/trash-2';
   import Circle from 'lucide-svelte/icons/circle';
   import Puzzle from 'lucide-svelte/icons/puzzle';
-  import { plugins } from '$lib/stores/plugins';
+  import LoaderCircle from 'lucide-svelte/icons/loader-circle';
+  import { plugins, uninstallPlugin } from '$lib/stores/plugins';
   import { getPluginIcon } from '$lib/utils/plugin-icons';
   import type { PluginManifest } from '$lib/types';
 
@@ -12,6 +13,21 @@
   plugins.subscribe((v) => {
     pluginList = v;
   });
+
+  let uninstallConfirmId = $state<string | null>(null);
+  let uninstalling = $state(false);
+
+  async function handleUninstall(pluginId: string): Promise<void> {
+    uninstalling = true;
+    try {
+      await uninstallPlugin(pluginId);
+    } catch {
+      // fetchPlugins inside uninstallPlugin already handles refresh
+    } finally {
+      uninstalling = false;
+      uninstallConfirmId = null;
+    }
+  }
 </script>
 
 <div class="space-y-6">
@@ -79,13 +95,41 @@
               </div>
             </div>
 
-            <button
-              class="flex items-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-error)]/20 px-3 py-2 text-sm font-medium text-[var(--color-error)] transition-colors hover:bg-[var(--color-error)]/10"
-              aria-label="{$t('settings.uninstall')} {plugin.name}"
-            >
-              <Trash2 size={16} />
-              <span class="hidden sm:inline">{$t('settings.uninstall')}</span>
-            </button>
+            {#if uninstallConfirmId === plugin.id}
+              <div class="flex items-center gap-2">
+                <span class="text-sm text-[var(--color-text-secondary)]">
+                  {$t('settings.confirmUninstall')}
+                </span>
+                <button
+                  class="flex items-center gap-1.5 rounded-[var(--radius-md)] bg-[var(--color-error)] px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-[var(--color-error)]/90 disabled:opacity-50"
+                  aria-label="{$t('settings.confirm')} {$t('settings.uninstall')} {plugin.name}"
+                  disabled={uninstalling}
+                  onclick={() => handleUninstall(plugin.id)}
+                >
+                  {#if uninstalling}
+                    <LoaderCircle size={16} class="animate-spin" />
+                  {/if}
+                  {$t('settings.confirm')}
+                </button>
+                <button
+                  class="rounded-[var(--radius-md)] px-3 py-2 text-sm text-[var(--color-text-secondary)] transition-colors hover:text-[var(--color-text-primary)]"
+                  aria-label="{$t('dashboard.cancel')}"
+                  disabled={uninstalling}
+                  onclick={() => (uninstallConfirmId = null)}
+                >
+                  {$t('dashboard.cancel')}
+                </button>
+              </div>
+            {:else}
+              <button
+                class="flex items-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-error)]/20 px-3 py-2 text-sm font-medium text-[var(--color-error)] transition-colors hover:bg-[var(--color-error)]/10"
+                aria-label="{$t('settings.uninstall')} {plugin.name}"
+                onclick={() => (uninstallConfirmId = plugin.id)}
+              >
+                <Trash2 size={16} />
+                <span class="hidden sm:inline">{$t('settings.uninstall')}</span>
+              </button>
+            {/if}
           </div>
         {/each}
       </div>
