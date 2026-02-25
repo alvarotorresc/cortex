@@ -1,5 +1,7 @@
 # Go binaries
 bin/
+/backend
+/cortex
 *.exe
 *.exe~
 *.dll
