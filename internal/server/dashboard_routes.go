@@ -22,7 +22,7 @@ func dashboardRoutes(router chi.Router, hostDB *db.HostDB) {
 		}
 
 		writer.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(writer).Encode(map[string]interface{}{"data": layouts})
+		_ = json.NewEncoder(writer).Encode(map[string]interface{}{"data": layouts})
 	})
 
 	// PUT /api/dashboard/layout -- save all widget positions (full replace)
@@ -50,7 +50,7 @@ func dashboardRoutes(router chi.Router, hostDB *db.HostDB) {
 		}
 
 		writer.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(writer).Encode(map[string]interface{}{
+		_ = json.NewEncoder(writer).Encode(map[string]interface{}{
 			"data": body.Widgets,
 			"meta": map[string]interface{}{"saved_at": now},
 		})
@@ -61,7 +61,7 @@ func dashboardRoutes(router chi.Router, hostDB *db.HostDB) {
 func writeDashboardError(writer http.ResponseWriter, statusCode int, code string, message string) {
 	writer.Header().Set("Content-Type", "application/json")
 	writer.WriteHeader(statusCode)
-	json.NewEncoder(writer).Encode(map[string]interface{}{
+	_ = json.NewEncoder(writer).Encode(map[string]interface{}{
 		"error": map[string]interface{}{
 			"code":    code,
 			"message": message,

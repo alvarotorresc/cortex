@@ -19,8 +19,8 @@ type HealthResponse struct {
 }
 
 // NewRouter creates and configures a chi router with middleware and routes.
-// It wires the plugin registry, host database, and static asset serving.
-func NewRouter(cfg *config.Config, registry *plugin.Registry, hostDB *db.HostDB) *chi.Mux {
+// It wires the plugin registry, loader, host database, and static asset serving.
+func NewRouter(cfg *config.Config, registry *plugin.Registry, loader *plugin.Loader, hostDB *db.HostDB) *chi.Mux {
 	router := chi.NewRouter()
 
 	// Middleware stack
@@ -40,8 +40,8 @@ func NewRouter(cfg *config.Config, registry *plugin.Registry, hostDB *db.HostDB)
 	// Health check
 	router.Get("/api/health", handleHealth)
 
-	// Plugin API routes (list, widget data, proxy)
-	pluginAPIRoutes(router, registry)
+	// Plugin API routes (list, install, uninstall, reload, widget data, proxy)
+	pluginAPIRoutes(router, registry, loader)
 
 	// Dashboard layout routes (host-level)
 	dashboardRoutes(router, hostDB)

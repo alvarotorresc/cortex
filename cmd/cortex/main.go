@@ -51,7 +51,7 @@ func main() {
 		loader.UnloadAll()
 	}()
 
-	if err := server.Start(cfg, registry, hostDB); err != nil {
+	if err := server.Start(cfg, registry, loader, hostDB); err != nil {
 		log.Fatalf("Server failed: %v", err)
 	}
 }

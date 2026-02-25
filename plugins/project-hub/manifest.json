@@ -1,0 +1,14 @@
+{
+  "id": "project-hub",
+  "name": "Project Hub",
+  "version": "0.1.0",
+  "author": "alvarotorresc",
+  "description": "Track the state of your entire project ecosystem",
+  "icon": "folder-git-2",
+  "color": "#8B5CF6",
+  "permissions": ["db:read", "db:write"],
+  "slots": {
+    "dashboard-widget": true,
+    "full-page": true
+  }
+}
