@@ -3,14 +3,11 @@
   import { onMount } from 'svelte';
   import Home from 'lucide-svelte/icons/home';
   import Puzzle from 'lucide-svelte/icons/puzzle';
-  import Pencil from 'lucide-svelte/icons/pencil';
-  import Save from 'lucide-svelte/icons/save';
-  import XIcon from 'lucide-svelte/icons/x';
   import TrendingUp from 'lucide-svelte/icons/trending-up';
   import TrendingDown from 'lucide-svelte/icons/trending-down';
   import WidgetCard from '$lib/components/WidgetCard.svelte';
+  import ProjectHubWidget from '$lib/components/plugins/ProjectHubWidget.svelte';
   import { plugins } from '$lib/stores/plugins';
-  import { editMode, toggleEditMode } from '$lib/stores/dashboard';
   import { pluginApi } from '$lib/api';
   import type { PluginManifest } from '$lib/types';
 
@@ -29,7 +26,13 @@
   }
 
   interface NotesWidgetData {
-    notes: NotePreview[];
+    latest: NotePreview[];
+    pinned_count: number;
+  }
+
+  interface ProjectHubWidgetData {
+    total: number;
+    by_status: Record<string, number>;
   }
 
   let pluginList = $state<PluginManifest[]>([]);
@@ -37,21 +40,19 @@
     pluginList = v;
   });
 
-  let isEditMode = $state(false);
-  editMode.subscribe((v) => {
-    isEditMode = v;
-  });
-
   let financeData = $state<FinanceWidgetData | null>(null);
   let notesData = $state<NotesWidgetData | null>(null);
+  let projectHubData = $state<ProjectHubWidgetData | null>(null);
   let widgetLoading = $state(true);
 
   const hasFinance = $derived(pluginList.some((p) => p.id === 'finance-tracker'));
   const hasNotes = $derived(pluginList.some((p) => p.id === 'quick-notes'));
+  const hasProjectHub = $derived(pluginList.some((p) => p.id === 'project-hub'));
   const hasPlugins = $derived(pluginList.length > 0);
 
   const financePlugin = $derived(pluginList.find((p) => p.id === 'finance-tracker'));
   const notesPlugin = $derived(pluginList.find((p) => p.id === 'quick-notes'));
+  const projectHubPlugin = $derived(pluginList.find((p) => p.id === 'project-hub'));
 
   async function loadWidgets() {
     widgetLoading = true;
@@ -85,6 +86,19 @@
         );
       }
 
+      if (hasProjectHub) {
+        promises.push(
+          pluginApi('project-hub')
+            .widget<{ data: ProjectHubWidgetData }>('dashboard-widget')
+            .then((res) => {
+              projectHubData = res.data;
+            })
+            .catch(() => {
+              projectHubData = null;
+            }),
+        );
+      }
+
       await Promise.allSettled(promises);
     } finally {
       widgetLoading = false;
@@ -93,14 +107,6 @@
 
   function formatCurrency(amount: number, currency: string = 'EUR'): string {
     return new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(amount);
-  }
-
-  function handleSaveLayout() {
-    toggleEditMode();
-  }
-
-  function handleCancelEdit() {
-    editMode.set(false);
   }
 
   onMount(() => {
@@ -125,35 +131,6 @@
         {$t('dashboard.title')}
       </h2>
     </div>
-
-    {#if hasPlugins}
-      {#if isEditMode}
-        <div class="flex items-center gap-2">
-          <button
-            onclick={handleSaveLayout}
-            class="flex items-center gap-2 rounded-[var(--radius-md)] bg-[var(--color-brand-blue)] px-4 py-2 text-sm font-medium text-white transition-colors hover:opacity-90"
-          >
-            <Save size={16} />
-            {$t('dashboard.save')}
-          </button>
-          <button
-            onclick={handleCancelEdit}
-            class="flex items-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-border)] px-4 py-2 text-sm font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-tertiary)]"
-          >
-            <XIcon size={16} />
-            {$t('dashboard.cancel')}
-          </button>
-        </div>
-      {:else}
-        <button
-          onclick={toggleEditMode}
-          class="flex items-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-border)] px-4 py-2 text-sm font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-tertiary)]"
-        >
-          <Pencil size={16} />
-          {$t('dashboard.customize')}
-        </button>
-      {/if}
-    {/if}
   </div>
 
   <!-- Widget Grid -->
@@ -186,7 +163,6 @@
           pluginName={financePlugin.name}
           pluginIcon={financePlugin.icon}
           pluginColor={financePlugin.color}
-          editMode={isEditMode}
         >
           {#if financeData}
             <div class="space-y-4">
@@ -237,12 +213,12 @@
           pluginName={notesPlugin.name}
           pluginIcon={notesPlugin.icon}
           pluginColor={notesPlugin.color}
-          editMode={isEditMode}
         >
-          {#if notesData && notesData.notes.length > 0}
+          {#if notesData && notesData.latest.length > 0}
             <div class="space-y-3">
-              {#each notesData.notes.slice(0, 3) as note}
-                <div
+              {#each notesData.latest.slice(0, 3) as note}
+                <a
+                  href="/plugins/quick-notes?note={note.id}"
                   class="flex items-start gap-3 rounded-[var(--radius-sm)] p-2 transition-colors hover:bg-[var(--color-bg-tertiary)]"
                 >
                   <div class="flex-1 overflow-hidden">
@@ -262,13 +238,26 @@
                       {note.content}
                     </p>
                   </div>
-                </div>
+                </a>
               {/each}
             </div>
           {:else}
             <p class="text-sm text-[var(--color-text-tertiary)]">{$t('notes.noNotes')}</p>
           {/if}
         </WidgetCard>
+      {/if}
+
+      <!-- Project Hub widget -->
+      {#if hasProjectHub && projectHubPlugin}
+        <a href="/plugins/project-hub" class="block">
+          <WidgetCard
+            pluginName={projectHubPlugin.name}
+            pluginIcon={projectHubPlugin.icon}
+            pluginColor={projectHubPlugin.color}
+          >
+            <ProjectHubWidget data={projectHubData} />
+          </WidgetCard>
+        </a>
       {/if}
     </div>
   {/if}

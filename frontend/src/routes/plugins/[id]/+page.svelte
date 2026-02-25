@@ -3,6 +3,7 @@
   import Puzzle from 'lucide-svelte/icons/puzzle';
   import FinancePage from '$lib/components/plugins/FinancePage.svelte';
   import NotesPage from '$lib/components/plugins/NotesPage.svelte';
+  import ProjectHubPage from '$lib/components/plugins/ProjectHubPage.svelte';
 
   let { data } = $props();
 
@@ -13,6 +14,8 @@
   <FinancePage />
 {:else if pluginId === 'quick-notes'}
   <NotesPage />
+{:else if pluginId === 'project-hub'}
+  <ProjectHubPage />
 {:else}
   <div
     class="flex flex-col items-center justify-center rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-bg-secondary)] px-8 py-16"
