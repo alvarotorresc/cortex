@@ -33,7 +33,7 @@ FROM node:22-alpine AS frontend-builder
 WORKDIR /src/frontend
 
 # Install pnpm
-RUN corepack enable && corepack prepare pnpm@latest --activate
+RUN npm install -g pnpm@10
 
 # Cache dependency installation
 COPY frontend/package.json frontend/pnpm-lock.yaml ./
