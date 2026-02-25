@@ -8,8 +8,9 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/alvarotorresc/cortex/pkg/sdk"
 	_ "modernc.org/sqlite"
+
+	"github.com/alvarotorresc/cortex/pkg/sdk"
 )
 
 //go:embed migrations/*.sql
@@ -885,7 +886,7 @@ func (p *ProjectHubPlugin) setProjectTags(req *sdk.APIRequest) (*sdk.APIResponse
 	if err != nil {
 		return nil, fmt.Errorf("beginning transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	// Remove existing tags.
 	if _, err := tx.Exec("DELETE FROM project_tags WHERE project_id = ?", projectID); err != nil {

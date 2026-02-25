@@ -17,7 +17,7 @@ func pluginAPIRoutes(router chi.Router, registry *plugin.Registry, loader *plugi
 	router.Get("/api/plugins", func(writer http.ResponseWriter, request *http.Request) {
 		manifests := registry.List()
 		writer.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(writer).Encode(map[string]interface{}{"data": manifests})
+		_ = json.NewEncoder(writer).Encode(map[string]interface{}{"data": manifests})
 	})
 
 	// Install (load) a plugin that exists on disk but is not currently loaded
@@ -37,7 +37,7 @@ func pluginAPIRoutes(router chi.Router, registry *plugin.Registry, loader *plugi
 
 		writer.Header().Set("Content-Type", "application/json")
 		writer.WriteHeader(http.StatusCreated)
-		json.NewEncoder(writer).Encode(map[string]interface{}{
+		_ = json.NewEncoder(writer).Encode(map[string]interface{}{
 			"data": map[string]interface{}{
 				"id":     pluginID,
 				"status": "installed",
@@ -62,7 +62,7 @@ func pluginAPIRoutes(router chi.Router, registry *plugin.Registry, loader *plugi
 		}
 
 		writer.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(writer).Encode(map[string]interface{}{
+		_ = json.NewEncoder(writer).Encode(map[string]interface{}{
 			"data": map[string]interface{}{
 				"id":     pluginID,
 				"status": "uninstalled",
@@ -92,7 +92,7 @@ func pluginAPIRoutes(router chi.Router, registry *plugin.Registry, loader *plugi
 		}
 
 		writer.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(writer).Encode(map[string]interface{}{
+		_ = json.NewEncoder(writer).Encode(map[string]interface{}{
 			"data": map[string]interface{}{
 				"id":     pluginID,
 				"status": "reloaded",
@@ -123,7 +123,7 @@ func pluginAPIRoutes(router chi.Router, registry *plugin.Registry, loader *plugi
 		}
 
 		writer.Header().Set("Content-Type", "application/json")
-		writer.Write(data)
+		_, _ = writer.Write(data)
 	})
 
 	// Proxy all other plugin API requests (catch-all, must be registered last)
@@ -168,7 +168,7 @@ func pluginAPIRoutes(router chi.Router, registry *plugin.Registry, loader *plugi
 
 		writer.Header().Set("Content-Type", response.ContentType)
 		writer.WriteHeader(response.StatusCode)
-		writer.Write(response.Body)
+		_, _ = writer.Write(response.Body)
 	})
 }
 
@@ -177,7 +177,7 @@ func pluginAPIRoutes(router chi.Router, registry *plugin.Registry, loader *plugi
 func writePluginError(writer http.ResponseWriter, statusCode int, code string, message string) {
 	writer.Header().Set("Content-Type", "application/json")
 	writer.WriteHeader(statusCode)
-	json.NewEncoder(writer).Encode(map[string]interface{}{
+	_ = json.NewEncoder(writer).Encode(map[string]interface{}{
 		"error": map[string]interface{}{
 			"code":    code,
 			"message": message,

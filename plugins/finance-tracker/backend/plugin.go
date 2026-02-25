@@ -8,8 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/alvarotorresc/cortex/pkg/sdk"
 	_ "modernc.org/sqlite"
+
+	"github.com/alvarotorresc/cortex/pkg/sdk"
 )
 
 //go:embed migrations/*.sql

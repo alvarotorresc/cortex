@@ -117,7 +117,7 @@ func (h *HostDB) SaveDashboardLayouts(layouts []WidgetLayout) error {
 	if err != nil {
 		return fmt.Errorf("starting transaction: %w", err)
 	}
-	defer transaction.Rollback()
+	defer func() { _ = transaction.Rollback() }()
 
 	// Delete all existing layouts
 	if _, err := transaction.Exec("DELETE FROM dashboard_layouts"); err != nil {
