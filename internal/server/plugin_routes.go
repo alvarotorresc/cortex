@@ -12,12 +12,92 @@ import (
 )
 
 // pluginAPIRoutes registers all plugin-related API endpoints.
-func pluginAPIRoutes(router chi.Router, registry *plugin.Registry) {
+func pluginAPIRoutes(router chi.Router, registry *plugin.Registry, loader *plugin.Loader) {
 	// List installed plugins
 	router.Get("/api/plugins", func(writer http.ResponseWriter, request *http.Request) {
 		manifests := registry.List()
 		writer.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(writer).Encode(map[string]interface{}{"data": manifests})
+	})
+
+	// Install (load) a plugin that exists on disk but is not currently loaded
+	router.Post("/api/plugins/{pluginID}/install", func(writer http.ResponseWriter, request *http.Request) {
+		pluginID := chi.URLParam(request, "pluginID")
+
+		// Check plugin is NOT already loaded
+		if _, ok := registry.Get(pluginID); ok {
+			writePluginError(writer, http.StatusConflict, "ALREADY_INSTALLED", "plugin is already installed")
+			return
+		}
+
+		if err := loader.LoadPlugin(pluginID); err != nil {
+			writePluginError(writer, http.StatusInternalServerError, "INSTALL_ERROR", "failed to install plugin")
+			return
+		}
+
+		writer.Header().Set("Content-Type", "application/json")
+		writer.WriteHeader(http.StatusCreated)
+		json.NewEncoder(writer).Encode(map[string]interface{}{
+			"data": map[string]interface{}{
+				"id":     pluginID,
+				"status": "installed",
+			},
+		})
+	})
+
+	// Uninstall (unload) a running plugin
+	router.Delete("/api/plugins/{pluginID}", func(writer http.ResponseWriter, request *http.Request) {
+		pluginID := chi.URLParam(request, "pluginID")
+
+		// Check plugin exists
+		if _, ok := registry.Get(pluginID); !ok {
+			writePluginError(writer, http.StatusNotFound, "NOT_FOUND", "plugin not found")
+			return
+		}
+
+		// Unload the plugin (calls Teardown + kills subprocess + unregisters)
+		if err := loader.UnloadPlugin(pluginID); err != nil {
+			writePluginError(writer, http.StatusInternalServerError, "UNLOAD_ERROR", "failed to unload plugin")
+			return
+		}
+
+		writer.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(writer).Encode(map[string]interface{}{
+			"data": map[string]interface{}{
+				"id":     pluginID,
+				"status": "uninstalled",
+			},
+		})
+	})
+
+	// Reload a running plugin (unload then load)
+	router.Post("/api/plugins/{pluginID}/reload", func(writer http.ResponseWriter, request *http.Request) {
+		pluginID := chi.URLParam(request, "pluginID")
+
+		// Check plugin exists
+		if _, ok := registry.Get(pluginID); !ok {
+			writePluginError(writer, http.StatusNotFound, "NOT_FOUND", "plugin not found")
+			return
+		}
+
+		// Unload then reload
+		if err := loader.UnloadPlugin(pluginID); err != nil {
+			writePluginError(writer, http.StatusInternalServerError, "UNLOAD_ERROR", "failed to unload plugin")
+			return
+		}
+
+		if err := loader.LoadPlugin(pluginID); err != nil {
+			writePluginError(writer, http.StatusInternalServerError, "LOAD_ERROR", "failed to reload plugin")
+			return
+		}
+
+		writer.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(writer).Encode(map[string]interface{}{
+			"data": map[string]interface{}{
+				"id":     pluginID,
+				"status": "reloaded",
+			},
+		})
 	})
 
 	// Plugin widget data
@@ -46,7 +126,7 @@ func pluginAPIRoutes(router chi.Router, registry *plugin.Registry) {
 		writer.Write(data)
 	})
 
-	// Proxy all other plugin API requests
+	// Proxy all other plugin API requests (catch-all, must be registered last)
 	router.HandleFunc("/api/plugins/{pluginID}/*", func(writer http.ResponseWriter, request *http.Request) {
 		pluginID := chi.URLParam(request, "pluginID")
 

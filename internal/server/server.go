@@ -25,8 +25,8 @@ const (
 // Start initializes and runs the HTTP server with graceful shutdown.
 // It blocks until a termination signal is received (SIGINT or SIGTERM),
 // then gracefully shuts down the server.
-func Start(cfg *config.Config, registry *plugin.Registry, hostDB *db.HostDB) error {
-	router := NewRouter(cfg, registry, hostDB)
+func Start(cfg *config.Config, registry *plugin.Registry, loader *plugin.Loader, hostDB *db.HostDB) error {
+	router := NewRouter(cfg, registry, loader, hostDB)
 
 	server := &http.Server{
 		Addr:         cfg.Address(),
