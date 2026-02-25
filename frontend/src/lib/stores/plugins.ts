@@ -20,3 +20,18 @@ export async function fetchPlugins(): Promise<void> {
     pluginsLoading.set(false);
   }
 }
+
+export async function uninstallPlugin(pluginId: string): Promise<void> {
+  await apiFetch(`/plugins/${pluginId}`, { method: 'DELETE' });
+  await fetchPlugins();
+}
+
+export async function installPlugin(pluginId: string): Promise<void> {
+  await apiFetch(`/plugins/${pluginId}/install`, { method: 'POST' });
+  await fetchPlugins();
+}
+
+export async function reloadPlugin(pluginId: string): Promise<void> {
+  await apiFetch(`/plugins/${pluginId}/reload`, { method: 'POST' });
+  await fetchPlugins();
+}

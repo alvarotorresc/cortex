@@ -1,7 +1,7 @@
 <script lang="ts">
   import '../app.css';
   import '$lib/i18n';
-  import { t, isLoading as i18nLoading } from 'svelte-i18n';
+  import { isLoading as i18nLoading } from 'svelte-i18n';
   import { page } from '$app/stores';
   import { onMount } from 'svelte';
   import Sidebar from '$lib/components/Sidebar.svelte';
@@ -42,17 +42,6 @@
     currentPath = p.url.pathname;
   });
 
-  const pageTitle = $derived.by(() => {
-    if (currentPath === '/') return $t('dashboard.title');
-    if (currentPath === '/settings') return $t('settings.title');
-    if (currentPath.startsWith('/plugins/')) {
-      const pluginId = currentPath.split('/')[2];
-      const plugin = pluginList.find((p) => p.id === pluginId);
-      return plugin?.name ?? 'Plugin';
-    }
-    return 'Cortex';
-  });
-
   onMount(() => {
     fetchPlugins();
   });
@@ -68,7 +57,7 @@
   <div
     class="flex h-screen items-center justify-center bg-[var(--color-bg-primary)] text-[var(--color-text-secondary)]"
   >
-    <p class="text-sm">{$t('common.loading')}</p>
+    <p class="text-sm">Loading...</p>
   </div>
 {:else}
   <div class="flex h-screen overflow-hidden bg-[var(--color-bg-primary)]">
@@ -103,7 +92,7 @@
 
     <!-- Content area -->
     <div class="flex flex-1 flex-col overflow-hidden">
-      <Topbar title={pageTitle} onMenuClick={toggleMobileSidebar} />
+      <Topbar onMenuClick={toggleMobileSidebar} />
 
       <main class="flex-1 overflow-y-auto">
         <div class="mx-auto max-w-[1400px] px-4 py-6 md:px-8 md:py-8">

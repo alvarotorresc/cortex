@@ -1,18 +1,15 @@
 <script lang="ts">
   import Sun from 'lucide-svelte/icons/sun';
   import Moon from 'lucide-svelte/icons/moon';
-  import Monitor from 'lucide-svelte/icons/monitor';
   import { theme, toggleTheme } from '$lib/stores/theme';
 
-  let currentTheme = $state<'light' | 'dark' | 'system'>('system');
+  let currentTheme = $state<'light' | 'dark'>('light');
 
   theme.subscribe((v) => {
     currentTheme = v;
   });
 
-  const label = $derived(
-    currentTheme === 'light' ? 'Light' : currentTheme === 'dark' ? 'Dark' : 'System',
-  );
+  const label = $derived(currentTheme === 'light' ? 'Light' : 'Dark');
 </script>
 
 <button
@@ -23,9 +20,7 @@
 >
   {#if currentTheme === 'light'}
     <Sun size={20} />
-  {:else if currentTheme === 'dark'}
-    <Moon size={20} />
   {:else}
-    <Monitor size={20} />
+    <Moon size={20} />
   {/if}
 </button>

@@ -4,11 +4,10 @@
   import LanguageSelector from './LanguageSelector.svelte';
 
   interface Props {
-    title: string;
     onMenuClick?: () => void;
   }
 
-  let { title, onMenuClick }: Props = $props();
+  let { onMenuClick }: Props = $props();
 </script>
 
 <header
@@ -25,8 +24,6 @@
         <Menu size={20} />
       </button>
     {/if}
-
-    <h1 class="text-xl font-semibold text-[var(--color-text-primary)]">{title}</h1>
   </div>
 
   <div class="flex items-center gap-1">
