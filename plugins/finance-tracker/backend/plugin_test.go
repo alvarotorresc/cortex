@@ -1395,6 +1395,160 @@ func TestWidgetData_MonthlyBalance(t *testing.T) {
 	}
 }
 
+func TestWidgetData_IncludesSparkline(t *testing.T) {
+	p := newTestPlugin(t)
+
+	now := time.Now()
+	currentMonth := now.Format("2006-01")
+
+	// Create transactions across 4 of the last 6 months (leaving 2 gaps to test zero-fill).
+	// Month -5 (oldest in sparkline): income 1000
+	m5 := now.AddDate(0, -5, 0).Format("2006-01")
+	createTransaction(t, p, fmt.Sprintf(`{"amount":1000,"type":"income","category":"salary","date":"%s-10"}`, m5))
+
+	// Month -3: income 2000, expense 500
+	m3 := now.AddDate(0, -3, 0).Format("2006-01")
+	createTransaction(t, p, fmt.Sprintf(`{"amount":2000,"type":"income","category":"salary","date":"%s-10"}`, m3))
+	createTransaction(t, p, fmt.Sprintf(`{"amount":500,"type":"expense","category":"rent","date":"%s-15"}`, m3))
+
+	// Month -1: expense 300
+	m1 := now.AddDate(0, -1, 0).Format("2006-01")
+	createTransaction(t, p, fmt.Sprintf(`{"amount":300,"type":"expense","category":"food","date":"%s-05"}`, m1))
+
+	// Current month: income 3000, expense 800
+	createTransaction(t, p, fmt.Sprintf(`{"amount":3000,"type":"income","category":"salary","date":"%s-15"}`, currentMonth))
+	createTransaction(t, p, fmt.Sprintf(`{"amount":800,"type":"expense","category":"groceries","date":"%s-20"}`, currentMonth))
+
+	widgetData, err := p.GetWidgetData("dashboard-widget")
+	if err != nil {
+		t.Fatalf("GetWidgetData returned error: %v", err)
+	}
+
+	var widget struct {
+		Data struct {
+			Sparkline []struct {
+				Month   string  `json:"month"`
+				Balance float64 `json:"balance"`
+			} `json:"sparkline"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(widgetData, &widget); err != nil {
+		t.Fatalf("failed to parse widget data: %v", err)
+	}
+
+	if len(widget.Data.Sparkline) != 6 {
+		t.Fatalf("expected 6 sparkline entries, got %d", len(widget.Data.Sparkline))
+	}
+
+	// Build expected months in order.
+	expectedMonths := make([]string, 6)
+	for i := 0; i < 6; i++ {
+		expectedMonths[i] = now.AddDate(0, -(5 - i), 0).Format("2006-01")
+	}
+
+	// Verify month ordering.
+	for i, entry := range widget.Data.Sparkline {
+		if entry.Month != expectedMonths[i] {
+			t.Errorf("sparkline[%d]: expected month %s, got %s", i, expectedMonths[i], entry.Month)
+		}
+	}
+
+	// Expected balances: m5=1000, m4=0, m3=1500, m2=0, m1=-300, current=2200.
+	expectedBalances := map[string]float64{
+		m5:           1000,
+		m3:           1500,
+		m1:           -300,
+		currentMonth: 2200,
+	}
+	for _, entry := range widget.Data.Sparkline {
+		expected, exists := expectedBalances[entry.Month]
+		if !exists {
+			expected = 0 // Months with no transactions should be zero.
+		}
+		if entry.Balance != expected {
+			t.Errorf("sparkline month %s: expected balance %f, got %f", entry.Month, expected, entry.Balance)
+		}
+	}
+}
+
+func TestWidgetData_IncludesBudgetProgress(t *testing.T) {
+	p := newTestPlugin(t)
+
+	currentMonth := time.Now().Format("2006-01")
+
+	// Create a global budget for the current month (no category = global).
+	createBudget(t, p, fmt.Sprintf(`{"name":"Monthly Total","amount":2000,"month":"%s"}`, currentMonth))
+
+	// Create expense transactions in the current month.
+	createTransaction(t, p, fmt.Sprintf(`{"amount":500,"type":"expense","category":"food","date":"%s-10"}`, currentMonth))
+	createTransaction(t, p, fmt.Sprintf(`{"amount":700,"type":"expense","category":"rent","date":"%s-15"}`, currentMonth))
+
+	widgetData, err := p.GetWidgetData("dashboard-widget")
+	if err != nil {
+		t.Fatalf("GetWidgetData returned error: %v", err)
+	}
+
+	var widget struct {
+		Data struct {
+			Budget *struct {
+				Amount     float64 `json:"amount"`
+				Spent      float64 `json:"spent"`
+				Remaining  float64 `json:"remaining"`
+				Percentage float64 `json:"percentage"`
+			} `json:"budget"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(widgetData, &widget); err != nil {
+		t.Fatalf("failed to parse widget data: %v", err)
+	}
+
+	if widget.Data.Budget == nil {
+		t.Fatal("expected budget to be present, got nil")
+	}
+
+	if widget.Data.Budget.Amount != 2000 {
+		t.Errorf("expected budget amount 2000, got %f", widget.Data.Budget.Amount)
+	}
+	if widget.Data.Budget.Spent != 1200 {
+		t.Errorf("expected budget spent 1200, got %f", widget.Data.Budget.Spent)
+	}
+	if widget.Data.Budget.Remaining != 800 {
+		t.Errorf("expected budget remaining 800, got %f", widget.Data.Budget.Remaining)
+	}
+	if widget.Data.Budget.Percentage != 60.0 {
+		t.Errorf("expected budget percentage 60.0, got %f", widget.Data.Budget.Percentage)
+	}
+}
+
+func TestWidgetData_NoBudget(t *testing.T) {
+	p := newTestPlugin(t)
+
+	currentMonth := time.Now().Format("2006-01")
+
+	// Create a transaction but NO budget.
+	createTransaction(t, p, fmt.Sprintf(`{"amount":500,"type":"expense","category":"food","date":"%s-10"}`, currentMonth))
+
+	widgetData, err := p.GetWidgetData("dashboard-widget")
+	if err != nil {
+		t.Fatalf("GetWidgetData returned error: %v", err)
+	}
+
+	var widget struct {
+		Data struct {
+			Budget *struct {
+				Amount float64 `json:"amount"`
+			} `json:"budget"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(widgetData, &widget); err != nil {
+		t.Fatalf("failed to parse widget data: %v", err)
+	}
+
+	if widget.Data.Budget != nil {
+		t.Errorf("expected budget to be nil when no global budget exists, got %+v", widget.Data.Budget)
+	}
+}
+
 // --- Migration v2 tests ---
 
 func TestMigrate_V2TablesExist(t *testing.T) {

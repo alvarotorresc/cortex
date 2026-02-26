@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -148,14 +149,40 @@ func (p *FinancePlugin) HandleAPI(req *sdk.APIRequest) (*sdk.APIResponse, error)
 	}
 }
 
+// widgetSparklineEntry represents a single month in the sparkline trend data.
+type widgetSparklineEntry struct {
+	Month   string  `json:"month"`
+	Balance float64 `json:"balance"`
+}
+
+// widgetBudgetProgress represents the global budget progress for the current month.
+type widgetBudgetProgress struct {
+	Amount     float64 `json:"amount"`
+	Spent      float64 `json:"spent"`
+	Remaining  float64 `json:"remaining"`
+	Percentage float64 `json:"percentage"`
+}
+
+// widgetData represents the full dashboard widget response payload.
+type widgetData struct {
+	Income    float64                `json:"income"`
+	Expense   float64                `json:"expense"`
+	Balance   float64                `json:"balance"`
+	Month     string                 `json:"month"`
+	Sparkline []widgetSparklineEntry `json:"sparkline"`
+	Budget    *widgetBudgetProgress  `json:"budget"`
+}
+
 // GetWidgetData returns dashboard widget data for the requested slot.
 func (p *FinancePlugin) GetWidgetData(slot string) ([]byte, error) {
 	if slot != "dashboard-widget" {
 		return json.Marshal(map[string]interface{}{"data": nil})
 	}
 
-	month := time.Now().Format("2006-01")
+	now := time.Now()
+	month := now.Format("2006-01")
 
+	// Current month income/expense.
 	var income, expense float64
 	row := p.db.QueryRow(
 		`SELECT COALESCE(SUM(CASE WHEN type='income' THEN amount ELSE 0 END), 0),
@@ -167,14 +194,121 @@ func (p *FinancePlugin) GetWidgetData(slot string) ([]byte, error) {
 		return nil, fmt.Errorf("querying monthly totals: %w", err)
 	}
 
-	return json.Marshal(map[string]interface{}{
-		"data": map[string]interface{}{
-			"income":  income,
-			"expense": expense,
-			"balance": income - expense,
-			"month":   month,
-		},
-	})
+	// Sparkline: last 6 months balance trend.
+	sparkline, err := p.getSparkline(now)
+	if err != nil {
+		return nil, fmt.Errorf("querying sparkline: %w", err)
+	}
+
+	// Budget progress: global budget for current month.
+	budget, err := p.getGlobalBudgetProgress(month)
+	if err != nil {
+		return nil, fmt.Errorf("querying budget progress: %w", err)
+	}
+
+	data := widgetData{
+		Income:    income,
+		Expense:   expense,
+		Balance:   income - expense,
+		Month:     month,
+		Sparkline: sparkline,
+		Budget:    budget,
+	}
+
+	return json.Marshal(map[string]interface{}{"data": data})
+}
+
+// getSparkline returns the balance for each of the last 6 months (including current).
+// Months with no transactions are filled with zero balance.
+func (p *FinancePlugin) getSparkline(now time.Time) ([]widgetSparklineEntry, error) {
+	startMonth := now.AddDate(0, -5, 0).Format("2006-01")
+	endMonth := now.Format("2006-01")
+
+	rows, err := p.db.Query(
+		`SELECT substr(date, 1, 7) as month,
+		        COALESCE(SUM(CASE WHEN type='income' THEN amount ELSE 0 END), 0) -
+		        COALESCE(SUM(CASE WHEN type='expense' THEN amount ELSE 0 END), 0) as balance
+		 FROM transactions
+		 WHERE substr(date, 1, 7) >= ? AND substr(date, 1, 7) <= ?
+		 GROUP BY substr(date, 1, 7)
+		 ORDER BY month`,
+		startMonth, endMonth,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	// Collect query results into a map for gap-filling.
+	balanceByMonth := make(map[string]float64)
+	for rows.Next() {
+		var m string
+		var b float64
+		if err := rows.Scan(&m, &b); err != nil {
+			return nil, err
+		}
+		balanceByMonth[m] = b
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Build 6-month array, filling gaps with zero.
+	sparkline := make([]widgetSparklineEntry, 6)
+	for i := 0; i < 6; i++ {
+		m := now.AddDate(0, -(5 - i), 0).Format("2006-01")
+		sparkline[i] = widgetSparklineEntry{
+			Month:   m,
+			Balance: balanceByMonth[m], // defaults to 0 if not in map
+		}
+	}
+
+	return sparkline, nil
+}
+
+// getGlobalBudgetProgress returns the budget progress for the global budget
+// (category IS NULL or empty) that matches the current month or is a recurring
+// budget (month IS NULL or empty). Returns nil if no global budget exists.
+func (p *FinancePlugin) getGlobalBudgetProgress(month string) (*widgetBudgetProgress, error) {
+	var budgetAmount float64
+	err := p.db.QueryRow(
+		`SELECT amount FROM budgets
+		 WHERE (category IS NULL OR category = '')
+		   AND (month = ? OR month = '' OR month IS NULL)
+		 ORDER BY CASE WHEN month = ? THEN 0 ELSE 1 END
+		 LIMIT 1`,
+		month, month,
+	).Scan(&budgetAmount)
+
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil // No global budget exists.
+		}
+		return nil, err
+	}
+
+	// Sum expenses for the current month.
+	var spent float64
+	if err := p.db.QueryRow(
+		`SELECT COALESCE(SUM(amount), 0) FROM transactions
+		 WHERE type = 'expense' AND date LIKE ?`,
+		month+"%",
+	).Scan(&spent); err != nil {
+		return nil, err
+	}
+
+	remaining := budgetAmount - spent
+	var percentage float64
+	if budgetAmount > 0 {
+		percentage = (spent / budgetAmount) * 100
+	}
+
+	return &widgetBudgetProgress{
+		Amount:     budgetAmount,
+		Spent:      spent,
+		Remaining:  remaining,
+		Percentage: percentage,
+	}, nil
 }
 
 // Teardown closes the database connection when the plugin is unloaded.
