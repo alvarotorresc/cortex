@@ -14,6 +14,7 @@ import (
 	"github.com/alvarotorresc/cortex/plugins/finance-tracker/backend/accounts"
 	"github.com/alvarotorresc/cortex/plugins/finance-tracker/backend/categories"
 	"github.com/alvarotorresc/cortex/plugins/finance-tracker/backend/shared"
+	"github.com/alvarotorresc/cortex/plugins/finance-tracker/backend/tags"
 )
 
 //go:embed migrations/*.sql
@@ -24,6 +25,7 @@ type FinancePlugin struct {
 	db                *sql.DB
 	accountsHandler   *accounts.Handler
 	categoriesHandler *categories.Handler
+	tagsHandler       *tags.Handler
 }
 
 // GetManifest returns the plugin's metadata.
@@ -97,6 +99,7 @@ func (p *FinancePlugin) Migrate(databasePath string) error {
 
 	p.accountsHandler = accounts.NewHandler(p.db)
 	p.categoriesHandler = categories.NewHandler(p.db)
+	p.tagsHandler = tags.NewHandler(p.db)
 
 	return nil
 }
@@ -116,6 +119,8 @@ func (p *FinancePlugin) HandleAPI(req *sdk.APIRequest) (*sdk.APIResponse, error)
 		return p.getSummary(req)
 	case strings.HasPrefix(req.Path, "/accounts"):
 		return p.accountsHandler.Handle(req)
+	case strings.HasPrefix(req.Path, "/tags"):
+		return p.tagsHandler.Handle(req)
 	default:
 		return jsonError(404, "NOT_FOUND", "route not found")
 	}

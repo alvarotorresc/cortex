@@ -1488,6 +1488,273 @@ func TestAccountBalance_NotFound(t *testing.T) {
 	}
 }
 
+// --- Tags tests ---
+
+func TestCreateTag(t *testing.T) {
+	p := newTestPlugin(t)
+
+	body := `{"name":"vacation","color":"#3B82F6"}`
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "POST",
+		Path:   "/tags",
+		Body:   []byte(body),
+	})
+	if err != nil {
+		t.Fatalf("HandleAPI returned error: %v", err)
+	}
+	if resp.StatusCode != 201 {
+		t.Fatalf("expected 201, got %d. Body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	// Verify it appears in the list.
+	listResp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "GET",
+		Path:   "/tags",
+	})
+	if err != nil {
+		t.Fatalf("list returned error: %v", err)
+	}
+
+	items := parseDataArray(t, listResp)
+	if len(items) != 1 {
+		t.Fatalf("expected 1 tag, got %d", len(items))
+	}
+
+	var tag struct {
+		Name  string `json:"name"`
+		Color string `json:"color"`
+	}
+	if err := json.Unmarshal(items[0], &tag); err != nil {
+		t.Fatalf("failed to unmarshal tag: %v", err)
+	}
+	if tag.Name != "vacation" {
+		t.Errorf("expected name 'vacation', got '%s'", tag.Name)
+	}
+	if tag.Color != "#3B82F6" {
+		t.Errorf("expected color '#3B82F6', got '%s'", tag.Color)
+	}
+}
+
+func TestCreateTag_DuplicateName(t *testing.T) {
+	p := newTestPlugin(t)
+
+	body := `{"name":"recurring","color":"#EF4444"}`
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "POST",
+		Path:   "/tags",
+		Body:   []byte(body),
+	})
+	if err != nil || resp.StatusCode != 201 {
+		t.Fatalf("first create failed: err=%v status=%d", err, resp.StatusCode)
+	}
+
+	// Attempt to create a tag with the same name.
+	resp, err = p.HandleAPI(&sdk.APIRequest{
+		Method: "POST",
+		Path:   "/tags",
+		Body:   []byte(body),
+	})
+	if err != nil {
+		t.Fatalf("HandleAPI returned error: %v", err)
+	}
+	if resp.StatusCode != 409 {
+		t.Fatalf("expected 409, got %d. Body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	code, _ := parseErrorResponse(t, resp)
+	if code != "CONFLICT" {
+		t.Errorf("expected CONFLICT, got '%s'", code)
+	}
+}
+
+func TestCreateTag_MissingName(t *testing.T) {
+	p := newTestPlugin(t)
+
+	body := `{"color":"#10B981"}`
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "POST",
+		Path:   "/tags",
+		Body:   []byte(body),
+	})
+	if err != nil {
+		t.Fatalf("HandleAPI returned error: %v", err)
+	}
+	if resp.StatusCode != 400 {
+		t.Fatalf("expected 400, got %d. Body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	code, _ := parseErrorResponse(t, resp)
+	if code != "VALIDATION_ERROR" {
+		t.Errorf("expected VALIDATION_ERROR, got '%s'", code)
+	}
+}
+
+func TestUpdateTag(t *testing.T) {
+	p := newTestPlugin(t)
+
+	// Create a tag to update.
+	createBody := `{"name":"work","color":"#F59E0B"}`
+	createResp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "POST",
+		Path:   "/tags",
+		Body:   []byte(createBody),
+	})
+	if err != nil {
+		t.Fatalf("create returned error: %v", err)
+	}
+	if createResp.StatusCode != 201 {
+		t.Fatalf("expected 201, got %d. Body: %s", createResp.StatusCode, string(createResp.Body))
+	}
+
+	data := parseDataObject(t, createResp)
+	var created struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.Unmarshal(data, &created); err != nil {
+		t.Fatalf("failed to parse create response: %v", err)
+	}
+
+	// Update name and color.
+	updateBody := `{"name":"office","color":"#8B5CF6"}`
+	updateResp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "PUT",
+		Path:   fmt.Sprintf("/tags/%d", created.ID),
+		Body:   []byte(updateBody),
+	})
+	if err != nil {
+		t.Fatalf("update returned error: %v", err)
+	}
+	if updateResp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d. Body: %s", updateResp.StatusCode, string(updateResp.Body))
+	}
+
+	// Verify the update in the list.
+	listResp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "GET",
+		Path:   "/tags",
+	})
+	if err != nil {
+		t.Fatalf("list returned error: %v", err)
+	}
+
+	items := parseDataArray(t, listResp)
+	if len(items) != 1 {
+		t.Fatalf("expected 1 tag, got %d", len(items))
+	}
+
+	var tag struct {
+		ID    int64  `json:"id"`
+		Name  string `json:"name"`
+		Color string `json:"color"`
+	}
+	if err := json.Unmarshal(items[0], &tag); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+	if tag.ID != created.ID {
+		t.Errorf("expected id %d, got %d", created.ID, tag.ID)
+	}
+	if tag.Name != "office" {
+		t.Errorf("expected name 'office', got '%s'", tag.Name)
+	}
+	if tag.Color != "#8B5CF6" {
+		t.Errorf("expected color '#8B5CF6', got '%s'", tag.Color)
+	}
+}
+
+func TestDeleteTag(t *testing.T) {
+	p := newTestPlugin(t)
+
+	// Create a tag to delete.
+	createBody := `{"name":"temporary","color":"#DC2626"}`
+	createResp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "POST",
+		Path:   "/tags",
+		Body:   []byte(createBody),
+	})
+	if err != nil {
+		t.Fatalf("create returned error: %v", err)
+	}
+
+	data := parseDataObject(t, createResp)
+	var created struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.Unmarshal(data, &created); err != nil {
+		t.Fatalf("failed to parse: %v", err)
+	}
+
+	// Delete it.
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "DELETE",
+		Path:   fmt.Sprintf("/tags/%d", created.ID),
+	})
+	if err != nil {
+		t.Fatalf("delete returned error: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d. Body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	// Verify it no longer appears in the list.
+	listResp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "GET",
+		Path:   "/tags",
+	})
+	if err != nil {
+		t.Fatalf("list returned error: %v", err)
+	}
+
+	items := parseDataArray(t, listResp)
+	if len(items) != 0 {
+		t.Fatalf("expected 0 tags after delete, got %d", len(items))
+	}
+}
+
+func TestListTags_OrderedByName(t *testing.T) {
+	p := newTestPlugin(t)
+
+	// Create tags in non-alphabetical order.
+	names := []string{"zebra", "alpha", "mango"}
+	for _, name := range names {
+		body := fmt.Sprintf(`{"name":"%s"}`, name)
+		resp, err := p.HandleAPI(&sdk.APIRequest{
+			Method: "POST",
+			Path:   "/tags",
+			Body:   []byte(body),
+		})
+		if err != nil || resp.StatusCode != 201 {
+			t.Fatalf("create tag '%s' failed: err=%v status=%d", name, err, resp.StatusCode)
+		}
+	}
+
+	// List and verify alphabetical order.
+	listResp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "GET",
+		Path:   "/tags",
+	})
+	if err != nil {
+		t.Fatalf("list returned error: %v", err)
+	}
+
+	items := parseDataArray(t, listResp)
+	if len(items) != 3 {
+		t.Fatalf("expected 3 tags, got %d", len(items))
+	}
+
+	expectedOrder := []string{"alpha", "mango", "zebra"}
+	for i, raw := range items {
+		var tag struct {
+			Name string `json:"name"`
+		}
+		if err := json.Unmarshal(raw, &tag); err != nil {
+			t.Fatalf("failed to unmarshal: %v", err)
+		}
+		if tag.Name != expectedOrder[i] {
+			t.Errorf("position %d: expected '%s', got '%s'", i, expectedOrder[i], tag.Name)
+		}
+	}
+}
+
 func TestAccountBalance_InterestEstimation(t *testing.T) {
 	p := newTestPlugin(t)
 
