@@ -144,6 +144,10 @@ func (p *FinancePlugin) HandleAPI(req *sdk.APIRequest) (*sdk.APIResponse, error)
 		return p.tagsHandler.Handle(req)
 	case strings.HasPrefix(req.Path, "/recurring"):
 		return p.recurringHandler.Handle(req)
+	// Legacy: /summary still works (redirects to reports).
+	case req.Method == "GET" && req.Path == "/summary":
+		req.Path = "/reports/summary"
+		return p.reportsHandler.Handle(req)
 	default:
 		return shared.JSONError(shared.NewAppError("NOT_FOUND", "route not found", 404))
 	}
