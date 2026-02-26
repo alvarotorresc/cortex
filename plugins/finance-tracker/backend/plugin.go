@@ -46,8 +46,8 @@ func (p *FinancePlugin) GetManifest() (*sdk.Manifest, error) {
 	return &sdk.Manifest{
 		ID:          "finance-tracker",
 		Name:        "Finance Tracker",
-		Version:     "0.1.0",
-		Description: "Track income and expenses, local and private",
+		Version:     "0.2.0",
+		Description: "Complete personal finance management — accounts, budgets, goals, investments, reports",
 		Icon:        "wallet",
 		Color:       "#10B981",
 		Permissions: []string{"db:read", "db:write"},
