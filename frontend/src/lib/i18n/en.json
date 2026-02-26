@@ -66,7 +66,71 @@
     "tags": "Tags",
     "search": "Search transactions...",
     "saving": "Saving...",
-    "deleting": "Deleting..."
+    "deleting": "Deleting...",
+    "budgets": {
+      "addBudget": "Add Budget",
+      "editBudget": "Edit Budget",
+      "noBudgets": "No budgets for this month.",
+      "spent": "Spent",
+      "remaining": "Remaining",
+      "global": "Global (all categories)",
+      "overBudget": "Over budget!",
+      "name": "Budget Name",
+      "confirmDelete": "Are you sure you want to delete this budget?"
+    },
+    "goals": {
+      "addGoal": "Add Goal",
+      "editGoal": "Edit Goal",
+      "noGoals": "No savings goals yet.",
+      "contribute": "Contribute",
+      "completed": "Completed!",
+      "remaining": "remaining",
+      "daysLeft": "days left",
+      "targetDate": "Target Date"
+    },
+    "investments": {
+      "addInvestment": "Add Investment",
+      "editInvestment": "Edit Investment",
+      "noInvestments": "No investments yet.",
+      "portfolio": "Portfolio",
+      "totalValue": "Total Value",
+      "totalPnL": "Total P&L",
+      "units": "Units",
+      "avgPrice": "Avg. Buy Price",
+      "currentPrice": "Current Price",
+      "pnl": "P&L",
+      "lastUpdated": "Last Updated",
+      "name": "Name",
+      "type": "Type",
+      "currency": "Currency",
+      "notes": "Notes",
+      "crypto": "Crypto",
+      "etf": "ETF",
+      "fund": "Fund",
+      "stock": "Stock",
+      "other": "Other",
+      "confirmDelete": "Are you sure you want to delete this investment?"
+    },
+    "overview": {
+      "monthlyBalance": "Monthly Balance",
+      "expensesByCategory": "Expenses by Category",
+      "trends": "6-Month Trends",
+      "accounts": "Accounts",
+      "netWorth": "Net Worth",
+      "totalNetWorth": "Total Net Worth",
+      "accountsTotal": "Accounts",
+      "investmentsTotal": "Investments",
+      "noExpenses": "No expenses this month.",
+      "noTrends": "No trend data available.",
+      "noAccounts": "No active accounts.",
+      "uncategorized": "Uncategorized",
+      "accountTypes": {
+        "checking": "Checking",
+        "savings": "Savings",
+        "cash": "Cash",
+        "investment": "Investment"
+      }
+    }
   },
   "notes": {
     "title": "Quick Notes",

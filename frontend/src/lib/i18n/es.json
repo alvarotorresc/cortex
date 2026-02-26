@@ -66,7 +66,71 @@
     "tags": "Tags",
     "search": "Buscar transacciones...",
     "saving": "Guardando...",
-    "deleting": "Eliminando..."
+    "deleting": "Eliminando...",
+    "budgets": {
+      "addBudget": "Agregar presupuesto",
+      "editBudget": "Editar presupuesto",
+      "noBudgets": "Sin presupuestos este mes.",
+      "spent": "Gastado",
+      "remaining": "Restante",
+      "global": "Global (todas las categorias)",
+      "overBudget": "Excede el presupuesto!",
+      "name": "Nombre del presupuesto",
+      "confirmDelete": "¿Seguro que quieres eliminar este presupuesto?"
+    },
+    "goals": {
+      "addGoal": "Agregar meta",
+      "editGoal": "Editar meta",
+      "noGoals": "Sin metas de ahorro todavia.",
+      "contribute": "Contribuir",
+      "completed": "Completada!",
+      "remaining": "restante",
+      "daysLeft": "dias restantes",
+      "targetDate": "Fecha objetivo"
+    },
+    "investments": {
+      "addInvestment": "Agregar inversion",
+      "editInvestment": "Editar inversion",
+      "noInvestments": "Sin inversiones todavia.",
+      "portfolio": "Portafolio",
+      "totalValue": "Valor Total",
+      "totalPnL": "P&L Total",
+      "units": "Unidades",
+      "avgPrice": "Precio Medio",
+      "currentPrice": "Precio Actual",
+      "pnl": "P&L",
+      "lastUpdated": "Ultima Actualizacion",
+      "name": "Nombre",
+      "type": "Tipo",
+      "currency": "Moneda",
+      "notes": "Notas",
+      "crypto": "Crypto",
+      "etf": "ETF",
+      "fund": "Fondo",
+      "stock": "Accion",
+      "other": "Otro",
+      "confirmDelete": "¿Seguro que quieres eliminar esta inversion?"
+    },
+    "overview": {
+      "monthlyBalance": "Balance Mensual",
+      "expensesByCategory": "Gastos por Categoria",
+      "trends": "Tendencias 6 Meses",
+      "accounts": "Cuentas",
+      "netWorth": "Patrimonio Neto",
+      "totalNetWorth": "Patrimonio Neto Total",
+      "accountsTotal": "Cuentas",
+      "investmentsTotal": "Inversiones",
+      "noExpenses": "Sin gastos este mes.",
+      "noTrends": "Sin datos de tendencia disponibles.",
+      "noAccounts": "Sin cuentas activas.",
+      "uncategorized": "Sin categoria",
+      "accountTypes": {
+        "checking": "Corriente",
+        "savings": "Ahorro",
+        "cash": "Efectivo",
+        "investment": "Inversion"
+      }
+    }
   },
   "notes": {
     "title": "Notas Rapidas",
