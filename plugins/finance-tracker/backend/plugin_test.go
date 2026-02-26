@@ -308,49 +308,504 @@ func TestDeleteTransaction(t *testing.T) {
 	}
 }
 
-func TestGetCategories(t *testing.T) {
+// --- Categories tests ---
+
+func TestListCategories_DefaultsExist(t *testing.T) {
 	p := newTestPlugin(t)
 
 	resp, err := p.HandleAPI(&sdk.APIRequest{
 		Method: "GET",
 		Path:   "/categories",
+		Query:  map[string]string{},
 	})
 	if err != nil {
 		t.Fatalf("HandleAPI returned error: %v", err)
 	}
 
 	if resp.StatusCode != 200 {
-		t.Fatalf("expected status 200, got %d", resp.StatusCode)
+		t.Fatalf("expected status 200, got %d. Body: %s", resp.StatusCode, string(resp.Body))
 	}
 
-	var body struct {
-		Data []Category `json:"data"`
-	}
-	if err := json.Unmarshal(resp.Body, &body); err != nil {
-		t.Fatalf("failed to parse categories: %v", err)
-	}
-
+	items := parseDataArray(t, resp)
 	// The migration seeds 8 default categories.
-	if len(body.Data) != 8 {
-		t.Fatalf("expected 8 default categories, got %d", len(body.Data))
+	if len(items) != 8 {
+		t.Fatalf("expected 8 default categories, got %d", len(items))
 	}
 
-	// Verify all are marked as default.
-	for _, c := range body.Data {
-		if !c.IsDefault {
-			t.Errorf("expected category '%s' to be default", c.Name)
-		}
-	}
-
-	// Verify expected category names.
+	// Verify all are marked as default and have expected names.
 	expectedNames := map[string]bool{
 		"salary": true, "groceries": true, "transport": true, "entertainment": true,
 		"restaurants": true, "bills": true, "health": true, "other": true,
 	}
-	for _, c := range body.Data {
+	for _, raw := range items {
+		var c struct {
+			Name      string `json:"name"`
+			IsDefault bool   `json:"is_default"`
+		}
+		if err := json.Unmarshal(raw, &c); err != nil {
+			t.Fatalf("failed to unmarshal category: %v", err)
+		}
+		if !c.IsDefault {
+			t.Errorf("expected category '%s' to be default", c.Name)
+		}
 		if !expectedNames[c.Name] {
 			t.Errorf("unexpected category name: '%s'", c.Name)
 		}
+	}
+}
+
+func TestListCategories_FilterByType(t *testing.T) {
+	p := newTestPlugin(t)
+
+	// Create an income-only category.
+	createBody := `{"name":"freelance","type":"income","icon":"briefcase"}`
+	createResp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "POST",
+		Path:   "/categories",
+		Body:   []byte(createBody),
+	})
+	if err != nil {
+		t.Fatalf("create returned error: %v", err)
+	}
+	if createResp.StatusCode != 201 {
+		t.Fatalf("expected 201, got %d. Body: %s", createResp.StatusCode, string(createResp.Body))
+	}
+
+	// Create an expense-only category.
+	createBody2 := `{"name":"gym","type":"expense","icon":"dumbbell"}`
+	createResp2, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "POST",
+		Path:   "/categories",
+		Body:   []byte(createBody2),
+	})
+	if err != nil {
+		t.Fatalf("create returned error: %v", err)
+	}
+	if createResp2.StatusCode != 201 {
+		t.Fatalf("expected 201, got %d. Body: %s", createResp2.StatusCode, string(createResp2.Body))
+	}
+
+	// Filter by income: should return income + both categories.
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "GET",
+		Path:   "/categories",
+		Query:  map[string]string{"type": "income"},
+	})
+	if err != nil {
+		t.Fatalf("list returned error: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	items := parseDataArray(t, resp)
+	for _, raw := range items {
+		var c struct {
+			Name string `json:"name"`
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(raw, &c); err != nil {
+			t.Fatalf("failed to unmarshal: %v", err)
+		}
+		if c.Type != "income" && c.Type != "both" {
+			t.Errorf("expected type 'income' or 'both', got '%s' for category '%s'", c.Type, c.Name)
+		}
+		// The expense-only "gym" category should NOT appear.
+		if c.Name == "gym" {
+			t.Error("expense-only category 'gym' should not appear in income filter")
+		}
+	}
+
+	// "freelance" (income) should be in the results.
+	var foundFreelance bool
+	for _, raw := range items {
+		var c struct {
+			Name string `json:"name"`
+		}
+		if err := json.Unmarshal(raw, &c); err != nil {
+			t.Fatalf("failed to unmarshal: %v", err)
+		}
+		if c.Name == "freelance" {
+			foundFreelance = true
+		}
+	}
+	if !foundFreelance {
+		t.Error("expected 'freelance' category in income filter results")
+	}
+}
+
+func TestCreateCategory(t *testing.T) {
+	p := newTestPlugin(t)
+
+	body := `{"name":"subscriptions","type":"expense","icon":"credit-card","color":"#FF5733"}`
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "POST",
+		Path:   "/categories",
+		Body:   []byte(body),
+	})
+	if err != nil {
+		t.Fatalf("HandleAPI returned error: %v", err)
+	}
+	if resp.StatusCode != 201 {
+		t.Fatalf("expected 201, got %d. Body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	// Verify it appears in the list.
+	listResp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "GET",
+		Path:   "/categories",
+		Query:  map[string]string{},
+	})
+	if err != nil {
+		t.Fatalf("list returned error: %v", err)
+	}
+
+	items := parseDataArray(t, listResp)
+	// 8 defaults + 1 new = 9.
+	if len(items) != 9 {
+		t.Fatalf("expected 9 categories, got %d", len(items))
+	}
+
+	var found bool
+	for _, raw := range items {
+		var c struct {
+			Name  string `json:"name"`
+			Type  string `json:"type"`
+			Icon  string `json:"icon"`
+			Color string `json:"color"`
+		}
+		if err := json.Unmarshal(raw, &c); err != nil {
+			t.Fatalf("failed to unmarshal: %v", err)
+		}
+		if c.Name == "subscriptions" {
+			found = true
+			if c.Type != "expense" {
+				t.Errorf("expected type 'expense', got '%s'", c.Type)
+			}
+			if c.Icon != "credit-card" {
+				t.Errorf("expected icon 'credit-card', got '%s'", c.Icon)
+			}
+			if c.Color != "#FF5733" {
+				t.Errorf("expected color '#FF5733', got '%s'", c.Color)
+			}
+		}
+	}
+	if !found {
+		t.Error("created category 'subscriptions' not found in list")
+	}
+}
+
+func TestCreateCategory_DuplicateName(t *testing.T) {
+	p := newTestPlugin(t)
+
+	// "salary" already exists as a default category.
+	body := `{"name":"salary","type":"income","icon":"banknote"}`
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "POST",
+		Path:   "/categories",
+		Body:   []byte(body),
+	})
+	if err != nil {
+		t.Fatalf("HandleAPI returned error: %v", err)
+	}
+	if resp.StatusCode != 409 {
+		t.Fatalf("expected 409, got %d. Body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	code, _ := parseErrorResponse(t, resp)
+	if code != "CONFLICT" {
+		t.Errorf("expected CONFLICT, got '%s'", code)
+	}
+}
+
+func TestCreateCategory_MissingName(t *testing.T) {
+	p := newTestPlugin(t)
+
+	body := `{"type":"expense","icon":"box"}`
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "POST",
+		Path:   "/categories",
+		Body:   []byte(body),
+	})
+	if err != nil {
+		t.Fatalf("HandleAPI returned error: %v", err)
+	}
+	if resp.StatusCode != 400 {
+		t.Fatalf("expected 400, got %d. Body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	code, _ := parseErrorResponse(t, resp)
+	if code != "VALIDATION_ERROR" {
+		t.Errorf("expected VALIDATION_ERROR, got '%s'", code)
+	}
+}
+
+func TestCreateCategory_InvalidType(t *testing.T) {
+	p := newTestPlugin(t)
+
+	body := `{"name":"bad","type":"invalid","icon":"x"}`
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "POST",
+		Path:   "/categories",
+		Body:   []byte(body),
+	})
+	if err != nil {
+		t.Fatalf("HandleAPI returned error: %v", err)
+	}
+	if resp.StatusCode != 400 {
+		t.Fatalf("expected 400, got %d. Body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	code, _ := parseErrorResponse(t, resp)
+	if code != "VALIDATION_ERROR" {
+		t.Errorf("expected VALIDATION_ERROR, got '%s'", code)
+	}
+}
+
+func TestUpdateCategory(t *testing.T) {
+	p := newTestPlugin(t)
+
+	// Create a category to update.
+	createBody := `{"name":"pets","type":"expense","icon":"dog"}`
+	createResp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "POST",
+		Path:   "/categories",
+		Body:   []byte(createBody),
+	})
+	if err != nil {
+		t.Fatalf("create returned error: %v", err)
+	}
+	if createResp.StatusCode != 201 {
+		t.Fatalf("expected 201, got %d. Body: %s", createResp.StatusCode, string(createResp.Body))
+	}
+
+	data := parseDataObject(t, createResp)
+	var created struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.Unmarshal(data, &created); err != nil {
+		t.Fatalf("failed to parse create response: %v", err)
+	}
+
+	// Update name, type, icon, color.
+	updateBody := `{"name":"animals","type":"both","icon":"cat","color":"#8B5CF6"}`
+	updateResp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "PUT",
+		Path:   fmt.Sprintf("/categories/%d", created.ID),
+		Body:   []byte(updateBody),
+	})
+	if err != nil {
+		t.Fatalf("update returned error: %v", err)
+	}
+	if updateResp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d. Body: %s", updateResp.StatusCode, string(updateResp.Body))
+	}
+
+	// Verify the update in the list.
+	listResp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "GET",
+		Path:   "/categories",
+		Query:  map[string]string{},
+	})
+	if err != nil {
+		t.Fatalf("list returned error: %v", err)
+	}
+
+	items := parseDataArray(t, listResp)
+	var found bool
+	for _, raw := range items {
+		var c struct {
+			ID    int64  `json:"id"`
+			Name  string `json:"name"`
+			Type  string `json:"type"`
+			Icon  string `json:"icon"`
+			Color string `json:"color"`
+		}
+		if err := json.Unmarshal(raw, &c); err != nil {
+			t.Fatalf("failed to unmarshal: %v", err)
+		}
+		if c.ID == created.ID {
+			found = true
+			if c.Name != "animals" {
+				t.Errorf("expected name 'animals', got '%s'", c.Name)
+			}
+			if c.Type != "both" {
+				t.Errorf("expected type 'both', got '%s'", c.Type)
+			}
+			if c.Icon != "cat" {
+				t.Errorf("expected icon 'cat', got '%s'", c.Icon)
+			}
+			if c.Color != "#8B5CF6" {
+				t.Errorf("expected color '#8B5CF6', got '%s'", c.Color)
+			}
+		}
+	}
+	if !found {
+		t.Error("updated category not found in list")
+	}
+}
+
+func TestDeleteCategory_NoTransactions(t *testing.T) {
+	p := newTestPlugin(t)
+
+	// Create a category to delete.
+	createBody := `{"name":"temporary","type":"expense","icon":"trash"}`
+	createResp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "POST",
+		Path:   "/categories",
+		Body:   []byte(createBody),
+	})
+	if err != nil {
+		t.Fatalf("create returned error: %v", err)
+	}
+
+	data := parseDataObject(t, createResp)
+	var created struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.Unmarshal(data, &created); err != nil {
+		t.Fatalf("failed to parse: %v", err)
+	}
+
+	// Delete it.
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "DELETE",
+		Path:   fmt.Sprintf("/categories/%d", created.ID),
+	})
+	if err != nil {
+		t.Fatalf("delete returned error: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d. Body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	// Verify it no longer appears in the list.
+	listResp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "GET",
+		Path:   "/categories",
+		Query:  map[string]string{},
+	})
+	if err != nil {
+		t.Fatalf("list returned error: %v", err)
+	}
+
+	items := parseDataArray(t, listResp)
+	for _, raw := range items {
+		var c struct {
+			ID int64 `json:"id"`
+		}
+		if err := json.Unmarshal(raw, &c); err != nil {
+			t.Fatalf("failed to unmarshal: %v", err)
+		}
+		if c.ID == created.ID {
+			t.Error("deleted category still appears in list")
+		}
+	}
+}
+
+func TestDeleteCategory_HasTransactions(t *testing.T) {
+	p := newTestPlugin(t)
+
+	// "groceries" is a default category. Create a transaction referencing it.
+	txBody := `{"amount":50,"type":"expense","category":"groceries","date":"2026-02-01"}`
+	txResp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "POST",
+		Path:   "/transactions",
+		Body:   []byte(txBody),
+	})
+	if err != nil || txResp.StatusCode != 201 {
+		t.Fatalf("failed to create transaction: err=%v status=%d", err, txResp.StatusCode)
+	}
+
+	// Find the "groceries" category ID.
+	var groceriesID int64
+	err = p.db.QueryRow("SELECT id FROM categories WHERE name = 'groceries'").Scan(&groceriesID)
+	if err != nil {
+		t.Fatalf("failed to find groceries category: %v", err)
+	}
+
+	// Attempt to delete it. Should fail with CONFLICT.
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "DELETE",
+		Path:   fmt.Sprintf("/categories/%d", groceriesID),
+	})
+	if err != nil {
+		t.Fatalf("delete returned error: %v", err)
+	}
+	if resp.StatusCode != 409 {
+		t.Fatalf("expected 409, got %d. Body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	code, _ := parseErrorResponse(t, resp)
+	if code != "CONFLICT" {
+		t.Errorf("expected CONFLICT, got '%s'", code)
+	}
+}
+
+func TestReorderCategories(t *testing.T) {
+	p := newTestPlugin(t)
+
+	// Get current categories to know their IDs.
+	listResp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "GET",
+		Path:   "/categories",
+		Query:  map[string]string{},
+	})
+	if err != nil {
+		t.Fatalf("list returned error: %v", err)
+	}
+
+	items := parseDataArray(t, listResp)
+	if len(items) < 3 {
+		t.Fatalf("expected at least 3 categories, got %d", len(items))
+	}
+
+	// Parse the first 3 category IDs.
+	type catID struct {
+		ID int64 `json:"id"`
+	}
+	var ids []int64
+	for i := 0; i < 3; i++ {
+		var c catID
+		if err := json.Unmarshal(items[i], &c); err != nil {
+			t.Fatalf("failed to unmarshal: %v", err)
+		}
+		ids = append(ids, c.ID)
+	}
+
+	// Reorder: reverse the sort_order of the first 3.
+	reorderBody := fmt.Sprintf(
+		`[{"id":%d,"sort_order":2},{"id":%d,"sort_order":1},{"id":%d,"sort_order":0}]`,
+		ids[0], ids[1], ids[2],
+	)
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "PUT",
+		Path:   "/categories/reorder",
+		Body:   []byte(reorderBody),
+	})
+	if err != nil {
+		t.Fatalf("reorder returned error: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d. Body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	// Verify the sort_order was updated by querying the DB directly.
+	var sortOrder int
+	err = p.db.QueryRow("SELECT sort_order FROM categories WHERE id = ?", ids[0]).Scan(&sortOrder)
+	if err != nil {
+		t.Fatalf("failed to query sort_order: %v", err)
+	}
+	if sortOrder != 2 {
+		t.Errorf("expected sort_order 2 for id %d, got %d", ids[0], sortOrder)
+	}
+
+	err = p.db.QueryRow("SELECT sort_order FROM categories WHERE id = ?", ids[2]).Scan(&sortOrder)
+	if err != nil {
+		t.Fatalf("failed to query sort_order: %v", err)
+	}
+	if sortOrder != 0 {
+		t.Errorf("expected sort_order 0 for id %d, got %d", ids[2], sortOrder)
 	}
 }
 

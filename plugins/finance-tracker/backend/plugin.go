@@ -12,6 +12,7 @@ import (
 
 	"github.com/alvarotorresc/cortex/pkg/sdk"
 	"github.com/alvarotorresc/cortex/plugins/finance-tracker/backend/accounts"
+	"github.com/alvarotorresc/cortex/plugins/finance-tracker/backend/categories"
 	"github.com/alvarotorresc/cortex/plugins/finance-tracker/backend/shared"
 )
 
@@ -20,8 +21,9 @@ var migrations embed.FS
 
 // FinancePlugin implements sdk.CortexPlugin for personal finance tracking.
 type FinancePlugin struct {
-	db              *sql.DB
-	accountsHandler *accounts.Handler
+	db                *sql.DB
+	accountsHandler   *accounts.Handler
+	categoriesHandler *categories.Handler
 }
 
 // GetManifest returns the plugin's metadata.
@@ -94,6 +96,7 @@ func (p *FinancePlugin) Migrate(databasePath string) error {
 	}
 
 	p.accountsHandler = accounts.NewHandler(p.db)
+	p.categoriesHandler = categories.NewHandler(p.db)
 
 	return nil
 }
@@ -107,8 +110,8 @@ func (p *FinancePlugin) HandleAPI(req *sdk.APIRequest) (*sdk.APIResponse, error)
 		return p.createTransaction(req)
 	case req.Method == "DELETE" && strings.HasPrefix(req.Path, "/transactions/"):
 		return p.deleteTransaction(req)
-	case req.Method == "GET" && req.Path == "/categories":
-		return p.listCategories()
+	case strings.HasPrefix(req.Path, "/categories"):
+		return p.categoriesHandler.Handle(req)
 	case req.Method == "GET" && req.Path == "/summary":
 		return p.getSummary(req)
 	case strings.HasPrefix(req.Path, "/accounts"):
@@ -166,14 +169,6 @@ type Transaction struct {
 	Description string  `json:"description"`
 	Date        string  `json:"date"`
 	CreatedAt   string  `json:"created_at"`
-}
-
-// Category represents a transaction category.
-type Category struct {
-	ID        int64  `json:"id"`
-	Name      string `json:"name"`
-	Icon      string `json:"icon"`
-	IsDefault bool   `json:"is_default"`
 }
 
 // CategorySummary represents aggregated spending per category.
@@ -282,29 +277,6 @@ func (p *FinancePlugin) deleteTransaction(req *sdk.APIRequest) (*sdk.APIResponse
 	}
 
 	return jsonSuccess(200, map[string]interface{}{"deleted": id})
-}
-
-func (p *FinancePlugin) listCategories() (*sdk.APIResponse, error) {
-	rows, err := p.db.Query("SELECT id, name, icon, is_default FROM categories ORDER BY is_default DESC, name")
-	if err != nil {
-		return nil, fmt.Errorf("querying categories: %w", err)
-	}
-	defer rows.Close()
-
-	categories := make([]Category, 0)
-	for rows.Next() {
-		var c Category
-		if err := rows.Scan(&c.ID, &c.Name, &c.Icon, &c.IsDefault); err != nil {
-			return nil, fmt.Errorf("scanning category: %w", err)
-		}
-		categories = append(categories, c)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterating categories: %w", err)
-	}
-
-	return jsonSuccess(200, categories)
 }
 
 func (p *FinancePlugin) getSummary(req *sdk.APIRequest) (*sdk.APIResponse, error) {
