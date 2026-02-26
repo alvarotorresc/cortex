@@ -57,13 +57,6 @@ func (s *Service) Create(input *CreateTransactionInput) (*Transaction, *shared.A
 		return nil, shared.NewAppError("INTERNAL", "failed to create transaction", 500)
 	}
 
-	// Link tags if provided.
-	if len(input.TagIDs) > 0 {
-		if err := s.repo.SetTags(id, input.TagIDs); err != nil {
-			return nil, shared.NewAppError("INTERNAL", "failed to link tags", 500)
-		}
-	}
-
 	tx, appErr := s.repo.GetByID(id)
 	if appErr != nil {
 		return nil, appErr
@@ -110,11 +103,6 @@ func (s *Service) Update(id int64, input *UpdateTransactionInput) (*Transaction,
 			return nil, appErr
 		}
 		return nil, shared.NewAppError("INTERNAL", "failed to update transaction", 500)
-	}
-
-	// Replace tag links.
-	if err := s.repo.SetTags(id, input.TagIDs); err != nil {
-		return nil, shared.NewAppError("INTERNAL", "failed to update tags", 500)
 	}
 
 	tx, appErr := s.repo.GetByID(id)

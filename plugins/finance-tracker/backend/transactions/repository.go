@@ -115,14 +115,20 @@ func (r *Repository) GetByID(id int64) (*Transaction, *shared.AppError) {
 	return &tx, nil
 }
 
-// Create inserts a new transaction and returns the generated ID.
+// Create inserts a new transaction and links tags atomically within a DB transaction.
 func (r *Repository) Create(input *CreateTransactionInput) (int64, error) {
+	tx, err := r.db.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("beginning transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
 	var destAccountID interface{}
 	if input.DestAccountID != nil {
 		destAccountID = *input.DestAccountID
 	}
 
-	result, err := r.db.Exec(
+	result, err := tx.Exec(
 		`INSERT INTO transactions (amount, type, account_id, dest_account_id, category, description, date)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		input.Amount, input.Type, *input.AccountID, destAccountID,
@@ -136,11 +142,30 @@ func (r *Repository) Create(input *CreateTransactionInput) (int64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("getting last insert id: %w", err)
 	}
+
+	for _, tagID := range input.TagIDs {
+		if _, err := tx.Exec(
+			"INSERT INTO transaction_tags (transaction_id, tag_id) VALUES (?, ?)",
+			id, tagID,
+		); err != nil {
+			return 0, fmt.Errorf("inserting transaction tag: %w", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("committing transaction: %w", err)
+	}
 	return id, nil
 }
 
-// Update modifies an existing transaction's fields.
+// Update modifies an existing transaction's fields and replaces tag links atomically.
 func (r *Repository) Update(id int64, input *UpdateTransactionInput) error {
+	tx, err := r.db.Begin()
+	if err != nil {
+		return fmt.Errorf("beginning transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
 	var destAccountID interface{}
 	if input.DestAccountID != nil {
 		destAccountID = *input.DestAccountID
@@ -151,7 +176,7 @@ func (r *Repository) Update(id int64, input *UpdateTransactionInput) error {
 		accountID = *input.AccountID
 	}
 
-	result, err := r.db.Exec(
+	result, err := tx.Exec(
 		`UPDATE transactions SET amount = ?, type = ?, account_id = ?, dest_account_id = ?,
 		 category = ?, description = ?, date = ?
 		 WHERE id = ?`,
@@ -166,7 +191,21 @@ func (r *Repository) Update(id int64, input *UpdateTransactionInput) error {
 	if rowsAffected == 0 {
 		return shared.NewNotFoundError("transaction", fmt.Sprintf("%d", id))
 	}
-	return nil
+
+	// Replace tag links within the same transaction.
+	if _, err := tx.Exec("DELETE FROM transaction_tags WHERE transaction_id = ?", id); err != nil {
+		return fmt.Errorf("clearing transaction tags: %w", err)
+	}
+	for _, tagID := range input.TagIDs {
+		if _, err := tx.Exec(
+			"INSERT INTO transaction_tags (transaction_id, tag_id) VALUES (?, ?)",
+			id, tagID,
+		); err != nil {
+			return fmt.Errorf("inserting transaction tag: %w", err)
+		}
+	}
+
+	return tx.Commit()
 }
 
 // Delete removes a transaction by its ID.

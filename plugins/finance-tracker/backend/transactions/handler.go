@@ -48,6 +48,13 @@ func (h *Handler) list(req *sdk.APIRequest) (*sdk.APIResponse, error) {
 		Search:   req.Query["search"],
 	}
 
+	// Validate month format if provided.
+	if filter.Month != "" {
+		if _, err := time.Parse("2006-01", filter.Month); err != nil {
+			return shared.JSONError(shared.NewValidationError("month must be in YYYY-MM format"))
+		}
+	}
+
 	// Default month to current if no filters are provided.
 	if filter.Month == "" && filter.Account == "" && filter.Category == "" &&
 		filter.Tag == "" && filter.Type == "" && filter.Search == "" {
