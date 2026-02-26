@@ -9,6 +9,7 @@ import (
 
 	"github.com/alvarotorresc/cortex/pkg/sdk"
 	"github.com/alvarotorresc/cortex/plugins/finance-tracker/backend/budgets"
+	"github.com/alvarotorresc/cortex/plugins/finance-tracker/backend/goals"
 	"github.com/alvarotorresc/cortex/plugins/finance-tracker/backend/recurring"
 	"github.com/alvarotorresc/cortex/plugins/finance-tracker/backend/transactions"
 )
@@ -3137,5 +3138,295 @@ func TestDeleteBudget(t *testing.T) {
 	items := parseDataArray(t, listResp)
 	if len(items) != 0 {
 		t.Errorf("expected 0 budgets after delete, got %d", len(items))
+	}
+}
+
+// --- Savings Goals Tests ---
+
+// createGoal is a test helper that creates a savings goal via the API and returns the ID.
+func createGoal(t *testing.T, p *FinancePlugin, body string) int64 {
+	t.Helper()
+
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "POST",
+		Path:   "/goals",
+		Body:   []byte(body),
+	})
+	if err != nil {
+		t.Fatalf("create goal failed: %v", err)
+	}
+	if resp.StatusCode != 201 {
+		t.Fatalf("expected 201, got %d. Body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	data := parseDataObject(t, resp)
+	var g struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.Unmarshal(data, &g); err != nil {
+		t.Fatalf("failed to parse created goal: %v", err)
+	}
+	return g.ID
+}
+
+func TestCreateGoal(t *testing.T) {
+	p := newTestPlugin(t)
+
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "POST",
+		Path:   "/goals",
+		Body:   []byte(`{"name":"Vacation Fund","target_amount":5000,"target_date":"2026-12-31","icon":"plane","color":"#3B82F6"}`),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.StatusCode != 201 {
+		t.Fatalf("expected 201, got %d. Body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	data := parseDataObject(t, resp)
+	var g goals.SavingsGoal
+	if err := json.Unmarshal(data, &g); err != nil {
+		t.Fatalf("failed to parse goal: %v", err)
+	}
+
+	if g.Name != "Vacation Fund" {
+		t.Errorf("expected name 'Vacation Fund', got %q", g.Name)
+	}
+	if g.TargetAmount != 5000 {
+		t.Errorf("expected target_amount 5000, got %f", g.TargetAmount)
+	}
+	if g.CurrentAmount != 0 {
+		t.Errorf("expected current_amount 0, got %f", g.CurrentAmount)
+	}
+	if g.TargetDate == nil || *g.TargetDate != "2026-12-31" {
+		t.Errorf("expected target_date '2026-12-31', got %v", g.TargetDate)
+	}
+	if g.Icon != "plane" {
+		t.Errorf("expected icon 'plane', got %q", g.Icon)
+	}
+	if g.Color != "#3B82F6" {
+		t.Errorf("expected color '#3B82F6', got %q", g.Color)
+	}
+	if g.IsCompleted {
+		t.Error("expected is_completed false")
+	}
+	if g.ID == 0 {
+		t.Error("expected non-zero ID")
+	}
+	if g.CreatedAt == "" {
+		t.Error("expected non-empty created_at")
+	}
+}
+
+func TestContribute(t *testing.T) {
+	p := newTestPlugin(t)
+
+	goalID := createGoal(t, p, `{"name":"Emergency Fund","target_amount":2000,"icon":"shield","color":"#EF4444"}`)
+
+	// Contribute 500.
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "POST",
+		Path:   fmt.Sprintf("/goals/%d/contribute", goalID),
+		Body:   []byte(`{"amount":500}`),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d. Body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	data := parseDataObject(t, resp)
+	var g goals.SavingsGoal
+	if err := json.Unmarshal(data, &g); err != nil {
+		t.Fatalf("failed to parse goal: %v", err)
+	}
+
+	if g.CurrentAmount != 500 {
+		t.Errorf("expected current_amount 500, got %f", g.CurrentAmount)
+	}
+	if g.IsCompleted {
+		t.Error("expected is_completed false after partial contribution")
+	}
+}
+
+func TestContribute_AutoCompletes(t *testing.T) {
+	p := newTestPlugin(t)
+
+	goalID := createGoal(t, p, `{"name":"New Laptop","target_amount":1000,"icon":"laptop","color":"#8B5CF6"}`)
+
+	// Contribute the full target amount.
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "POST",
+		Path:   fmt.Sprintf("/goals/%d/contribute", goalID),
+		Body:   []byte(`{"amount":1000}`),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d. Body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	data := parseDataObject(t, resp)
+	var g goals.SavingsGoal
+	if err := json.Unmarshal(data, &g); err != nil {
+		t.Fatalf("failed to parse goal: %v", err)
+	}
+
+	if g.CurrentAmount != 1000 {
+		t.Errorf("expected current_amount 1000, got %f", g.CurrentAmount)
+	}
+	if !g.IsCompleted {
+		t.Error("expected is_completed true after reaching target")
+	}
+}
+
+func TestUpdateGoal(t *testing.T) {
+	p := newTestPlugin(t)
+
+	goalID := createGoal(t, p, `{"name":"Old Car","target_amount":3000,"icon":"car","color":"#F59E0B"}`)
+
+	// Update target amount and name.
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "PUT",
+		Path:   fmt.Sprintf("/goals/%d", goalID),
+		Body:   []byte(`{"name":"New Car","target_amount":5000,"icon":"car","color":"#F59E0B"}`),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d. Body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	data := parseDataObject(t, resp)
+	var g goals.SavingsGoal
+	if err := json.Unmarshal(data, &g); err != nil {
+		t.Fatalf("failed to parse goal: %v", err)
+	}
+
+	if g.Name != "New Car" {
+		t.Errorf("expected name 'New Car', got %q", g.Name)
+	}
+	if g.TargetAmount != 5000 {
+		t.Errorf("expected target_amount 5000, got %f", g.TargetAmount)
+	}
+}
+
+func TestDeleteGoal(t *testing.T) {
+	p := newTestPlugin(t)
+
+	goalID := createGoal(t, p, `{"name":"Temp Goal","target_amount":100,"icon":"star","color":"#EC4899"}`)
+
+	// Delete it.
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "DELETE",
+		Path:   fmt.Sprintf("/goals/%d", goalID),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d. Body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	// Verify it returns 404 when we try to get it (via contribute).
+	resp2, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "POST",
+		Path:   fmt.Sprintf("/goals/%d/contribute", goalID),
+		Body:   []byte(`{"amount":10}`),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp2.StatusCode != 404 {
+		t.Errorf("expected 404 after delete, got %d. Body: %s", resp2.StatusCode, string(resp2.Body))
+	}
+}
+
+func TestContribute_NegativeAmount(t *testing.T) {
+	p := newTestPlugin(t)
+
+	goalID := createGoal(t, p, `{"name":"Test","target_amount":500,"icon":"star","color":"#000000"}`)
+
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "POST",
+		Path:   fmt.Sprintf("/goals/%d/contribute", goalID),
+		Body:   []byte(`{"amount":-50}`),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.StatusCode != 400 {
+		t.Fatalf("expected 400, got %d. Body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	code, _ := parseErrorResponse(t, resp)
+	if code != "VALIDATION_ERROR" {
+		t.Errorf("expected VALIDATION_ERROR, got %q", code)
+	}
+}
+
+func TestCreateGoal_EmptyName(t *testing.T) {
+	p := newTestPlugin(t)
+
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "POST",
+		Path:   "/goals",
+		Body:   []byte(`{"name":"","target_amount":500,"icon":"star","color":"#000000"}`),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.StatusCode != 400 {
+		t.Fatalf("expected 400, got %d. Body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	code, _ := parseErrorResponse(t, resp)
+	if code != "VALIDATION_ERROR" {
+		t.Errorf("expected VALIDATION_ERROR, got %q", code)
+	}
+}
+
+func TestListGoals(t *testing.T) {
+	p := newTestPlugin(t)
+
+	createGoal(t, p, `{"name":"Goal A","target_amount":1000,"icon":"a","color":"#111111"}`)
+	createGoal(t, p, `{"name":"Goal B","target_amount":2000,"icon":"b","color":"#222222"}`)
+
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "GET",
+		Path:   "/goals",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d. Body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	items := parseDataArray(t, resp)
+	if len(items) != 2 {
+		t.Fatalf("expected 2 goals, got %d", len(items))
+	}
+
+	// Verify both goals are present. Order may vary when created_at is identical
+	// (datetime('now') has second precision), so check by name existence.
+	names := make(map[string]bool)
+	for _, item := range items {
+		var g goals.SavingsGoal
+		if err := json.Unmarshal(item, &g); err != nil {
+			t.Fatalf("failed to parse goal: %v", err)
+		}
+		names[g.Name] = true
+	}
+
+	if !names["Goal A"] {
+		t.Error("expected 'Goal A' in list")
+	}
+	if !names["Goal B"] {
+		t.Error("expected 'Goal B' in list")
 	}
 }

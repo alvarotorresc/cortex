@@ -14,6 +14,7 @@ import (
 	"github.com/alvarotorresc/cortex/plugins/finance-tracker/backend/accounts"
 	"github.com/alvarotorresc/cortex/plugins/finance-tracker/backend/budgets"
 	"github.com/alvarotorresc/cortex/plugins/finance-tracker/backend/categories"
+	"github.com/alvarotorresc/cortex/plugins/finance-tracker/backend/goals"
 	"github.com/alvarotorresc/cortex/plugins/finance-tracker/backend/recurring"
 	"github.com/alvarotorresc/cortex/plugins/finance-tracker/backend/shared"
 	"github.com/alvarotorresc/cortex/plugins/finance-tracker/backend/tags"
@@ -29,6 +30,7 @@ type FinancePlugin struct {
 	accountsHandler     *accounts.Handler
 	budgetsHandler      *budgets.Handler
 	categoriesHandler   *categories.Handler
+	goalsHandler        *goals.Handler
 	tagsHandler         *tags.Handler
 	transactionsHandler *transactions.Handler
 	recurringHandler    *recurring.Handler
@@ -106,6 +108,7 @@ func (p *FinancePlugin) Migrate(databasePath string) error {
 	p.accountsHandler = accounts.NewHandler(p.db)
 	p.budgetsHandler = budgets.NewHandler(p.db)
 	p.categoriesHandler = categories.NewHandler(p.db)
+	p.goalsHandler = goals.NewHandler(p.db)
 	p.tagsHandler = tags.NewHandler(p.db)
 	p.transactionsHandler = transactions.NewHandler(p.db)
 	p.recurringHandler = recurring.NewHandler(p.db)
@@ -126,6 +129,8 @@ func (p *FinancePlugin) HandleAPI(req *sdk.APIRequest) (*sdk.APIResponse, error)
 		return p.accountsHandler.Handle(req)
 	case strings.HasPrefix(req.Path, "/budgets"):
 		return p.budgetsHandler.Handle(req)
+	case strings.HasPrefix(req.Path, "/goals"):
+		return p.goalsHandler.Handle(req)
 	case strings.HasPrefix(req.Path, "/tags"):
 		return p.tagsHandler.Handle(req)
 	case strings.HasPrefix(req.Path, "/recurring"):
