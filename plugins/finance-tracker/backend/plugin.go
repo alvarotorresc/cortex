@@ -12,6 +12,7 @@ import (
 
 	"github.com/alvarotorresc/cortex/pkg/sdk"
 	"github.com/alvarotorresc/cortex/plugins/finance-tracker/backend/accounts"
+	"github.com/alvarotorresc/cortex/plugins/finance-tracker/backend/budgets"
 	"github.com/alvarotorresc/cortex/plugins/finance-tracker/backend/categories"
 	"github.com/alvarotorresc/cortex/plugins/finance-tracker/backend/recurring"
 	"github.com/alvarotorresc/cortex/plugins/finance-tracker/backend/shared"
@@ -26,6 +27,7 @@ var migrations embed.FS
 type FinancePlugin struct {
 	db                  *sql.DB
 	accountsHandler     *accounts.Handler
+	budgetsHandler      *budgets.Handler
 	categoriesHandler   *categories.Handler
 	tagsHandler         *tags.Handler
 	transactionsHandler *transactions.Handler
@@ -102,6 +104,7 @@ func (p *FinancePlugin) Migrate(databasePath string) error {
 	}
 
 	p.accountsHandler = accounts.NewHandler(p.db)
+	p.budgetsHandler = budgets.NewHandler(p.db)
 	p.categoriesHandler = categories.NewHandler(p.db)
 	p.tagsHandler = tags.NewHandler(p.db)
 	p.transactionsHandler = transactions.NewHandler(p.db)
@@ -121,6 +124,8 @@ func (p *FinancePlugin) HandleAPI(req *sdk.APIRequest) (*sdk.APIResponse, error)
 		return p.getSummary(req)
 	case strings.HasPrefix(req.Path, "/accounts"):
 		return p.accountsHandler.Handle(req)
+	case strings.HasPrefix(req.Path, "/budgets"):
+		return p.budgetsHandler.Handle(req)
 	case strings.HasPrefix(req.Path, "/tags"):
 		return p.tagsHandler.Handle(req)
 	case strings.HasPrefix(req.Path, "/recurring"):

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/alvarotorresc/cortex/pkg/sdk"
+	"github.com/alvarotorresc/cortex/plugins/finance-tracker/backend/budgets"
 	"github.com/alvarotorresc/cortex/plugins/finance-tracker/backend/recurring"
 	"github.com/alvarotorresc/cortex/plugins/finance-tracker/backend/transactions"
 )
@@ -2852,5 +2853,289 @@ func TestDeleteRecurringRule(t *testing.T) {
 	txCountAfter := len(parseDataArray(t, txRespAfter))
 	if txCountAfter != txCountBefore {
 		t.Errorf("expected %d transactions after deactivation, got %d", txCountBefore, txCountAfter)
+	}
+}
+
+// ─── Budgets ────────────────────────────────────────────────────────────────
+
+// createBudget is a test helper that creates a budget via the API and returns the ID.
+func createBudget(t *testing.T, p *FinancePlugin, body string) int64 {
+	t.Helper()
+
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "POST",
+		Path:   "/budgets",
+		Body:   []byte(body),
+	})
+	if err != nil {
+		t.Fatalf("create budget failed: %v", err)
+	}
+	if resp.StatusCode != 201 {
+		t.Fatalf("expected 201, got %d. Body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	data := parseDataObject(t, resp)
+	var b struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.Unmarshal(data, &b); err != nil {
+		t.Fatalf("failed to parse created budget: %v", err)
+	}
+	return b.ID
+}
+
+func TestCreateBudget_Global(t *testing.T) {
+	p := newTestPlugin(t)
+
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "POST",
+		Path:   "/budgets",
+		Body:   []byte(`{"name":"Monthly Total","amount":1000,"month":"2026-01"}`),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.StatusCode != 201 {
+		t.Fatalf("expected 201, got %d. Body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	data := parseDataObject(t, resp)
+	var b budgets.Budget
+	if err := json.Unmarshal(data, &b); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+
+	if b.ID == 0 {
+		t.Error("expected non-zero ID")
+	}
+	if b.Name != "Monthly Total" {
+		t.Errorf("expected name 'Monthly Total', got %q", b.Name)
+	}
+	if b.Category != "" {
+		t.Errorf("expected empty category for global budget, got %q", b.Category)
+	}
+	if b.Amount != 1000 {
+		t.Errorf("expected amount 1000, got %f", b.Amount)
+	}
+	if b.Month != "2026-01" {
+		t.Errorf("expected month '2026-01', got %q", b.Month)
+	}
+}
+
+func TestCreateBudget_PerCategory(t *testing.T) {
+	p := newTestPlugin(t)
+
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "POST",
+		Path:   "/budgets",
+		Body:   []byte(`{"name":"Eating Out","category":"restaurants","amount":200,"month":"2026-01"}`),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.StatusCode != 201 {
+		t.Fatalf("expected 201, got %d. Body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	data := parseDataObject(t, resp)
+	var b budgets.Budget
+	if err := json.Unmarshal(data, &b); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+
+	if b.Category != "restaurants" {
+		t.Errorf("expected category 'restaurants', got %q", b.Category)
+	}
+	if b.Amount != 200 {
+		t.Errorf("expected amount 200, got %f", b.Amount)
+	}
+}
+
+func TestListBudgets_CalculatesSpent(t *testing.T) {
+	p := newTestPlugin(t)
+
+	// Create a budget: 200 for restaurants in 2026-02.
+	createBudget(t, p, `{"name":"Eating Out","category":"restaurants","amount":200,"month":"2026-02"}`)
+
+	// Create an expense transaction for restaurants in 2026-02.
+	createTransaction(t, p, `{"amount":150,"type":"expense","category":"restaurants","description":"dinner","date":"2026-02-10"}`)
+
+	// List budgets for 2026-02.
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "GET",
+		Path:   "/budgets",
+		Query:  map[string]string{"month": "2026-02"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d. Body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	items := parseDataArray(t, resp)
+	if len(items) != 1 {
+		t.Fatalf("expected 1 budget, got %d", len(items))
+	}
+
+	var bwp budgets.BudgetWithProgress
+	if err := json.Unmarshal(items[0], &bwp); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+
+	if bwp.Spent != 150 {
+		t.Errorf("expected spent 150, got %f", bwp.Spent)
+	}
+	if bwp.Remaining != 50 {
+		t.Errorf("expected remaining 50, got %f", bwp.Remaining)
+	}
+	if bwp.Percentage != 75 {
+		t.Errorf("expected percentage 75, got %f", bwp.Percentage)
+	}
+}
+
+func TestListBudgets_OverBudget(t *testing.T) {
+	p := newTestPlugin(t)
+
+	// Create a budget: 100 for groceries in 2026-03.
+	createBudget(t, p, `{"name":"Groceries","category":"groceries","amount":100,"month":"2026-03"}`)
+
+	// Spend 150 (over budget).
+	createTransaction(t, p, `{"amount":150,"type":"expense","category":"groceries","description":"weekly shop","date":"2026-03-05"}`)
+
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "GET",
+		Path:   "/budgets",
+		Query:  map[string]string{"month": "2026-03"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	items := parseDataArray(t, resp)
+	if len(items) != 1 {
+		t.Fatalf("expected 1 budget, got %d", len(items))
+	}
+
+	var bwp budgets.BudgetWithProgress
+	if err := json.Unmarshal(items[0], &bwp); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+
+	if bwp.Remaining != -50 {
+		t.Errorf("expected remaining -50, got %f", bwp.Remaining)
+	}
+	if bwp.Percentage != 150 {
+		t.Errorf("expected percentage 150, got %f", bwp.Percentage)
+	}
+}
+
+func TestListBudgets_GlobalSumsAllExpenses(t *testing.T) {
+	p := newTestPlugin(t)
+
+	// Create a global budget (no category) for 2026-04.
+	createBudget(t, p, `{"name":"April Total","amount":500,"month":"2026-04"}`)
+
+	// Create expenses in different categories.
+	createTransaction(t, p, `{"amount":100,"type":"expense","category":"groceries","description":"food","date":"2026-04-01"}`)
+	createTransaction(t, p, `{"amount":80,"type":"expense","category":"restaurants","description":"dinner","date":"2026-04-05"}`)
+	createTransaction(t, p, `{"amount":50,"type":"expense","category":"transport","description":"gas","date":"2026-04-10"}`)
+
+	// Also create an income transaction (should NOT be counted).
+	createTransaction(t, p, `{"amount":2000,"type":"income","category":"salary","description":"paycheck","date":"2026-04-01"}`)
+
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "GET",
+		Path:   "/budgets",
+		Query:  map[string]string{"month": "2026-04"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	items := parseDataArray(t, resp)
+	if len(items) != 1 {
+		t.Fatalf("expected 1 budget, got %d", len(items))
+	}
+
+	var bwp budgets.BudgetWithProgress
+	if err := json.Unmarshal(items[0], &bwp); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+
+	// 100 + 80 + 50 = 230, NOT including the 2000 income.
+	if bwp.Spent != 230 {
+		t.Errorf("expected spent 230, got %f", bwp.Spent)
+	}
+	if bwp.Remaining != 270 {
+		t.Errorf("expected remaining 270, got %f", bwp.Remaining)
+	}
+	if bwp.Percentage != 46 {
+		t.Errorf("expected percentage 46, got %f", bwp.Percentage)
+	}
+}
+
+func TestUpdateBudget(t *testing.T) {
+	p := newTestPlugin(t)
+
+	budgetID := createBudget(t, p, `{"name":"Food","category":"food","amount":300,"month":"2026-05"}`)
+
+	// Update amount to 400.
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "PUT",
+		Path:   fmt.Sprintf("/budgets/%d", budgetID),
+		Body:   []byte(`{"name":"Food Updated","category":"food","amount":400,"month":"2026-05"}`),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d. Body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	data := parseDataObject(t, resp)
+	var b budgets.Budget
+	if err := json.Unmarshal(data, &b); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+
+	if b.Amount != 400 {
+		t.Errorf("expected amount 400, got %f", b.Amount)
+	}
+	if b.Name != "Food Updated" {
+		t.Errorf("expected name 'Food Updated', got %q", b.Name)
+	}
+}
+
+func TestDeleteBudget(t *testing.T) {
+	p := newTestPlugin(t)
+
+	budgetID := createBudget(t, p, `{"name":"Temp","category":"misc","amount":100,"month":"2026-06"}`)
+
+	// Delete it.
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "DELETE",
+		Path:   fmt.Sprintf("/budgets/%d", budgetID),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d. Body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	// Verify it no longer appears in the list.
+	listResp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "GET",
+		Path:   "/budgets",
+		Query:  map[string]string{"month": "2026-06"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	items := parseDataArray(t, listResp)
+	if len(items) != 0 {
+		t.Errorf("expected 0 budgets after delete, got %d", len(items))
 	}
 }
