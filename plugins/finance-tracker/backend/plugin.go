@@ -15,7 +15,9 @@ import (
 	"github.com/alvarotorresc/cortex/plugins/finance-tracker/backend/budgets"
 	"github.com/alvarotorresc/cortex/plugins/finance-tracker/backend/categories"
 	"github.com/alvarotorresc/cortex/plugins/finance-tracker/backend/goals"
+	"github.com/alvarotorresc/cortex/plugins/finance-tracker/backend/investments"
 	"github.com/alvarotorresc/cortex/plugins/finance-tracker/backend/recurring"
+	"github.com/alvarotorresc/cortex/plugins/finance-tracker/backend/reports"
 	"github.com/alvarotorresc/cortex/plugins/finance-tracker/backend/shared"
 	"github.com/alvarotorresc/cortex/plugins/finance-tracker/backend/tags"
 	"github.com/alvarotorresc/cortex/plugins/finance-tracker/backend/transactions"
@@ -31,9 +33,11 @@ type FinancePlugin struct {
 	budgetsHandler      *budgets.Handler
 	categoriesHandler   *categories.Handler
 	goalsHandler        *goals.Handler
+	investmentsHandler  *investments.Handler
 	tagsHandler         *tags.Handler
 	transactionsHandler *transactions.Handler
 	recurringHandler    *recurring.Handler
+	reportsHandler      *reports.Handler
 }
 
 // GetManifest returns the plugin's metadata.
@@ -109,9 +113,11 @@ func (p *FinancePlugin) Migrate(databasePath string) error {
 	p.budgetsHandler = budgets.NewHandler(p.db)
 	p.categoriesHandler = categories.NewHandler(p.db)
 	p.goalsHandler = goals.NewHandler(p.db)
+	p.investmentsHandler = investments.NewHandler(p.db)
 	p.tagsHandler = tags.NewHandler(p.db)
 	p.transactionsHandler = transactions.NewHandler(p.db)
 	p.recurringHandler = recurring.NewHandler(p.db)
+	p.reportsHandler = reports.NewHandler(p.db)
 
 	return nil
 }
@@ -123,14 +129,16 @@ func (p *FinancePlugin) HandleAPI(req *sdk.APIRequest) (*sdk.APIResponse, error)
 		return p.transactionsHandler.Handle(req)
 	case strings.HasPrefix(req.Path, "/categories"):
 		return p.categoriesHandler.Handle(req)
-	case req.Method == "GET" && req.Path == "/summary":
-		return p.getSummary(req)
+	case strings.HasPrefix(req.Path, "/reports"):
+		return p.reportsHandler.Handle(req)
 	case strings.HasPrefix(req.Path, "/accounts"):
 		return p.accountsHandler.Handle(req)
 	case strings.HasPrefix(req.Path, "/budgets"):
 		return p.budgetsHandler.Handle(req)
 	case strings.HasPrefix(req.Path, "/goals"):
 		return p.goalsHandler.Handle(req)
+	case strings.HasPrefix(req.Path, "/investments"):
+		return p.investmentsHandler.Handle(req)
 	case strings.HasPrefix(req.Path, "/tags"):
 		return p.tagsHandler.Handle(req)
 	case strings.HasPrefix(req.Path, "/recurring"):
@@ -175,49 +183,4 @@ func (p *FinancePlugin) Teardown() error {
 		return p.db.Close()
 	}
 	return nil
-}
-
-// --- Data types kept temporarily for getSummary ---
-
-// CategorySummary represents aggregated spending per category.
-type CategorySummary struct {
-	Category string  `json:"category"`
-	Total    float64 `json:"total"`
-}
-
-// getSummary returns spending aggregated by category for a given month.
-// NOTE: This will be replaced by the reports module in a future task.
-func (p *FinancePlugin) getSummary(req *sdk.APIRequest) (*sdk.APIResponse, error) {
-	month := req.Query["month"]
-	if month == "" {
-		month = time.Now().Format("2006-01")
-	}
-
-	rows, err := p.db.Query(
-		`SELECT category, SUM(amount) as total
-		 FROM transactions
-		 WHERE type = 'expense' AND date LIKE ?
-		 GROUP BY category
-		 ORDER BY total DESC`,
-		month+"%",
-	)
-	if err != nil {
-		return nil, fmt.Errorf("querying summary: %w", err)
-	}
-	defer rows.Close()
-
-	summaries := make([]CategorySummary, 0)
-	for rows.Next() {
-		var s CategorySummary
-		if err := rows.Scan(&s.Category, &s.Total); err != nil {
-			return nil, fmt.Errorf("scanning summary: %w", err)
-		}
-		summaries = append(summaries, s)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterating summary: %w", err)
-	}
-
-	return shared.JSONSuccess(200, summaries)
 }

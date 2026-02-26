@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"path/filepath"
 	"testing"
 	"time"
@@ -10,7 +11,9 @@ import (
 	"github.com/alvarotorresc/cortex/pkg/sdk"
 	"github.com/alvarotorresc/cortex/plugins/finance-tracker/backend/budgets"
 	"github.com/alvarotorresc/cortex/plugins/finance-tracker/backend/goals"
+	"github.com/alvarotorresc/cortex/plugins/finance-tracker/backend/investments"
 	"github.com/alvarotorresc/cortex/plugins/finance-tracker/backend/recurring"
+	"github.com/alvarotorresc/cortex/plugins/finance-tracker/backend/reports"
 	"github.com/alvarotorresc/cortex/plugins/finance-tracker/backend/transactions"
 )
 
@@ -3428,5 +3431,700 @@ func TestListGoals(t *testing.T) {
 	}
 	if !names["Goal B"] {
 		t.Error("expected 'Goal B' in list")
+	}
+}
+
+// --- Investment tests ---
+
+// createInvestment is a test helper that creates an investment via the API and returns the ID.
+func createInvestment(t *testing.T, p *FinancePlugin, body string) int64 {
+	t.Helper()
+
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "POST",
+		Path:   "/investments",
+		Body:   []byte(body),
+	})
+	if err != nil {
+		t.Fatalf("create investment failed: %v", err)
+	}
+	if resp.StatusCode != 201 {
+		t.Fatalf("expected 201, got %d. Body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	data := parseDataObject(t, resp)
+	var inv struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.Unmarshal(data, &inv); err != nil {
+		t.Fatalf("failed to parse created investment: %v", err)
+	}
+	return inv.ID
+}
+
+func TestCreateInvestment(t *testing.T) {
+	p := newTestPlugin(t)
+
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "POST",
+		Path:   "/investments",
+		Body: []byte(`{
+			"name": "Bitcoin",
+			"type": "crypto",
+			"units": 0.5,
+			"avg_buy_price": 45000,
+			"current_price": 52000,
+			"currency": "EUR",
+			"notes": "Long-term hold"
+		}`),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.StatusCode != 201 {
+		t.Fatalf("expected 201, got %d. Body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	data := parseDataObject(t, resp)
+	var inv investments.Investment
+	if err := json.Unmarshal(data, &inv); err != nil {
+		t.Fatalf("failed to parse investment: %v", err)
+	}
+
+	if inv.Name != "Bitcoin" {
+		t.Errorf("expected name 'Bitcoin', got %q", inv.Name)
+	}
+	if inv.Type != "crypto" {
+		t.Errorf("expected type 'crypto', got %q", inv.Type)
+	}
+	if inv.Units == nil || *inv.Units != 0.5 {
+		t.Errorf("expected units 0.5, got %v", inv.Units)
+	}
+	if inv.AvgBuyPrice == nil || *inv.AvgBuyPrice != 45000 {
+		t.Errorf("expected avg_buy_price 45000, got %v", inv.AvgBuyPrice)
+	}
+	if inv.CurrentPrice == nil || *inv.CurrentPrice != 52000 {
+		t.Errorf("expected current_price 52000, got %v", inv.CurrentPrice)
+	}
+	if inv.Currency != "EUR" {
+		t.Errorf("expected currency 'EUR', got %q", inv.Currency)
+	}
+	if inv.Notes != "Long-term hold" {
+		t.Errorf("expected notes 'Long-term hold', got %q", inv.Notes)
+	}
+	if inv.ID == 0 {
+		t.Error("expected non-zero ID")
+	}
+	if inv.CreatedAt == "" {
+		t.Error("expected non-empty created_at")
+	}
+}
+
+func TestListInvestments_CalculatesPnL(t *testing.T) {
+	p := newTestPlugin(t)
+
+	createInvestment(t, p, `{
+		"name": "Bitcoin",
+		"type": "crypto",
+		"units": 0.5,
+		"avg_buy_price": 45000,
+		"current_price": 52000,
+		"currency": "EUR"
+	}`)
+
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "GET",
+		Path:   "/investments",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d. Body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	items := parseDataArray(t, resp)
+	if len(items) != 1 {
+		t.Fatalf("expected 1 investment, got %d", len(items))
+	}
+
+	var inv investments.InvestmentWithPnL
+	if err := json.Unmarshal(items[0], &inv); err != nil {
+		t.Fatalf("failed to parse investment with P&L: %v", err)
+	}
+
+	// total_invested = 0.5 * 45000 = 22500
+	if inv.TotalInvested == nil || *inv.TotalInvested != 22500 {
+		t.Errorf("expected total_invested 22500, got %v", inv.TotalInvested)
+	}
+	// current_value = 0.5 * 52000 = 26000
+	if inv.CurrentValue == nil || *inv.CurrentValue != 26000 {
+		t.Errorf("expected current_value 26000, got %v", inv.CurrentValue)
+	}
+	// pnl = 26000 - 22500 = 3500
+	if inv.PnL == nil || *inv.PnL != 3500 {
+		t.Errorf("expected pnl 3500, got %v", inv.PnL)
+	}
+	// pnl_percentage = (3500 / 22500) * 100 = 15.5555...
+	if inv.PnLPercentage == nil || math.Abs(*inv.PnLPercentage-15.5555) > 0.01 {
+		t.Errorf("expected pnl_percentage ~15.56, got %v", inv.PnLPercentage)
+	}
+}
+
+func TestUpdateInvestment_PriceUpdate(t *testing.T) {
+	p := newTestPlugin(t)
+
+	id := createInvestment(t, p, `{
+		"name": "Ethereum",
+		"type": "crypto",
+		"units": 2.0,
+		"avg_buy_price": 3000,
+		"current_price": 3500,
+		"currency": "EUR"
+	}`)
+
+	// Update current_price to 4000.
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "PUT",
+		Path:   fmt.Sprintf("/investments/%d", id),
+		Body: []byte(`{
+			"name": "Ethereum",
+			"type": "crypto",
+			"units": 2.0,
+			"avg_buy_price": 3000,
+			"current_price": 4000,
+			"currency": "EUR"
+		}`),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d. Body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	data := parseDataObject(t, resp)
+	var inv investments.InvestmentWithPnL
+	if err := json.Unmarshal(data, &inv); err != nil {
+		t.Fatalf("failed to parse investment: %v", err)
+	}
+
+	if inv.CurrentPrice == nil || *inv.CurrentPrice != 4000 {
+		t.Errorf("expected current_price 4000, got %v", inv.CurrentPrice)
+	}
+	// total_invested = 2 * 3000 = 6000
+	if inv.TotalInvested == nil || *inv.TotalInvested != 6000 {
+		t.Errorf("expected total_invested 6000, got %v", inv.TotalInvested)
+	}
+	// current_value = 2 * 4000 = 8000
+	if inv.CurrentValue == nil || *inv.CurrentValue != 8000 {
+		t.Errorf("expected current_value 8000, got %v", inv.CurrentValue)
+	}
+	// pnl = 8000 - 6000 = 2000
+	if inv.PnL == nil || *inv.PnL != 2000 {
+		t.Errorf("expected pnl 2000, got %v", inv.PnL)
+	}
+}
+
+func TestDeleteInvestment(t *testing.T) {
+	p := newTestPlugin(t)
+
+	id := createInvestment(t, p, `{
+		"name": "SPDR S&P 500",
+		"type": "etf",
+		"units": 10,
+		"avg_buy_price": 450,
+		"current_price": 470,
+		"currency": "USD"
+	}`)
+
+	// Delete the investment.
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "DELETE",
+		Path:   fmt.Sprintf("/investments/%d", id),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d. Body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	// Verify it returns 404 on update attempt.
+	resp, err = p.HandleAPI(&sdk.APIRequest{
+		Method: "PUT",
+		Path:   fmt.Sprintf("/investments/%d", id),
+		Body:   []byte(`{"name": "SPDR", "type": "etf"}`),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.StatusCode != 404 {
+		t.Errorf("expected 404 after delete, got %d. Body: %s", resp.StatusCode, string(resp.Body))
+	}
+}
+
+func TestCreateInvestment_InvalidType(t *testing.T) {
+	p := newTestPlugin(t)
+
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "POST",
+		Path:   "/investments",
+		Body:   []byte(`{"name": "Treasury Bond", "type": "bond"}`),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.StatusCode != 400 {
+		t.Fatalf("expected 400, got %d. Body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	code, _ := parseErrorResponse(t, resp)
+	if code != "VALIDATION_ERROR" {
+		t.Errorf("expected error code 'VALIDATION_ERROR', got %q", code)
+	}
+}
+
+func TestPnLPercentage_ZeroInvested(t *testing.T) {
+	p := newTestPlugin(t)
+
+	// Create investment with avg_buy_price = 0 (total_invested = 0).
+	createInvestment(t, p, `{
+		"name": "Free Airdrop",
+		"type": "crypto",
+		"units": 100,
+		"avg_buy_price": 0,
+		"current_price": 5,
+		"currency": "EUR"
+	}`)
+
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "GET",
+		Path:   "/investments",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d. Body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	items := parseDataArray(t, resp)
+	if len(items) != 1 {
+		t.Fatalf("expected 1 investment, got %d", len(items))
+	}
+
+	var inv investments.InvestmentWithPnL
+	if err := json.Unmarshal(items[0], &inv); err != nil {
+		t.Fatalf("failed to parse investment: %v", err)
+	}
+
+	// total_invested = 100 * 0 = 0 -- should still be calculated.
+	if inv.TotalInvested == nil || *inv.TotalInvested != 0 {
+		t.Errorf("expected total_invested 0, got %v", inv.TotalInvested)
+	}
+	// current_value = 100 * 5 = 500
+	if inv.CurrentValue == nil || *inv.CurrentValue != 500 {
+		t.Errorf("expected current_value 500, got %v", inv.CurrentValue)
+	}
+	// pnl = 500 - 0 = 500
+	if inv.PnL == nil || *inv.PnL != 500 {
+		t.Errorf("expected pnl 500, got %v", inv.PnL)
+	}
+	// pnl_percentage should be nil (division by zero guard).
+	if inv.PnLPercentage != nil {
+		t.Errorf("expected pnl_percentage nil (division by zero guard), got %v", *inv.PnLPercentage)
+	}
+}
+
+func TestListInvestments_NilUnits(t *testing.T) {
+	p := newTestPlugin(t)
+
+	// Create investment without units or prices.
+	createInvestment(t, p, `{
+		"name": "Watchlist Item",
+		"type": "stock",
+		"currency": "EUR",
+		"notes": "Tracking only"
+	}`)
+
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "GET",
+		Path:   "/investments",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d. Body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	items := parseDataArray(t, resp)
+	if len(items) != 1 {
+		t.Fatalf("expected 1 investment, got %d", len(items))
+	}
+
+	var inv investments.InvestmentWithPnL
+	if err := json.Unmarshal(items[0], &inv); err != nil {
+		t.Fatalf("failed to parse investment: %v", err)
+	}
+
+	if inv.Name != "Watchlist Item" {
+		t.Errorf("expected name 'Watchlist Item', got %q", inv.Name)
+	}
+	// All P&L fields should be nil when units/prices are nil.
+	if inv.TotalInvested != nil {
+		t.Errorf("expected total_invested nil, got %v", *inv.TotalInvested)
+	}
+	if inv.CurrentValue != nil {
+		t.Errorf("expected current_value nil, got %v", *inv.CurrentValue)
+	}
+	if inv.PnL != nil {
+		t.Errorf("expected pnl nil, got %v", *inv.PnL)
+	}
+	if inv.PnLPercentage != nil {
+		t.Errorf("expected pnl_percentage nil, got %v", *inv.PnLPercentage)
+	}
+}
+
+// --- Reports Tests ---
+
+func TestSummary_MonthlyTotals(t *testing.T) {
+	p := newTestPlugin(t)
+
+	// Create income and expense transactions in the same month.
+	createTransaction(t, p, `{"amount": 3000, "type": "income", "category": "salary", "description": "Salary", "date": "2025-03-01"}`)
+	createTransaction(t, p, `{"amount": 500, "type": "income", "category": "freelance", "description": "Consulting", "date": "2025-03-15"}`)
+	createTransaction(t, p, `{"amount": 1200, "type": "expense", "category": "rent", "description": "Rent", "date": "2025-03-05"}`)
+	createTransaction(t, p, `{"amount": 200, "type": "expense", "category": "food", "description": "Groceries", "date": "2025-03-10"}`)
+
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "GET",
+		Path:   "/reports/summary",
+		Query:  map[string]string{"month": "2025-03"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d. Body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	data := parseDataObject(t, resp)
+	var summary reports.MonthlySummary
+	if err := json.Unmarshal(data, &summary); err != nil {
+		t.Fatalf("failed to parse summary: %v", err)
+	}
+
+	if summary.Month != "2025-03" {
+		t.Errorf("expected month '2025-03', got %q", summary.Month)
+	}
+	if summary.Income != 3500 {
+		t.Errorf("expected income 3500, got %f", summary.Income)
+	}
+	if summary.Expense != 1400 {
+		t.Errorf("expected expense 1400, got %f", summary.Expense)
+	}
+	if summary.Balance != 2100 {
+		t.Errorf("expected balance 2100, got %f", summary.Balance)
+	}
+}
+
+func TestSummary_ByCategory(t *testing.T) {
+	p := newTestPlugin(t)
+
+	createTransaction(t, p, `{"amount": 1200, "type": "expense", "category": "rent", "description": "Rent", "date": "2025-04-01"}`)
+	createTransaction(t, p, `{"amount": 300, "type": "expense", "category": "food", "description": "Groceries", "date": "2025-04-05"}`)
+	createTransaction(t, p, `{"amount": 150, "type": "expense", "category": "food", "description": "Restaurants", "date": "2025-04-10"}`)
+	createTransaction(t, p, `{"amount": 50, "type": "expense", "category": "transport", "description": "Metro", "date": "2025-04-15"}`)
+
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "GET",
+		Path:   "/reports/summary",
+		Query:  map[string]string{"month": "2025-04"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d. Body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	data := parseDataObject(t, resp)
+	var summary reports.MonthlySummary
+	if err := json.Unmarshal(data, &summary); err != nil {
+		t.Fatalf("failed to parse summary: %v", err)
+	}
+
+	if len(summary.ByCategory) != 3 {
+		t.Fatalf("expected 3 categories, got %d", len(summary.ByCategory))
+	}
+
+	// Categories should be ordered by total DESC: rent (1200), food (450), transport (50).
+	if summary.ByCategory[0].Category != "rent" || summary.ByCategory[0].Total != 1200 {
+		t.Errorf("expected first category rent=1200, got %s=%f", summary.ByCategory[0].Category, summary.ByCategory[0].Total)
+	}
+	if summary.ByCategory[1].Category != "food" || summary.ByCategory[1].Total != 450 {
+		t.Errorf("expected second category food=450, got %s=%f", summary.ByCategory[1].Category, summary.ByCategory[1].Total)
+	}
+	if summary.ByCategory[2].Category != "transport" || summary.ByCategory[2].Total != 50 {
+		t.Errorf("expected third category transport=50, got %s=%f", summary.ByCategory[2].Category, summary.ByCategory[2].Total)
+	}
+}
+
+func TestSummary_ByAccount(t *testing.T) {
+	p := newTestPlugin(t)
+
+	// Create a second account (default "Main Account" id=1 already exists from migration).
+	savingsID := createAccount(t, p, `{"name": "Savings", "type": "savings", "currency": "EUR"}`)
+
+	// Transactions in Main Account (id=1).
+	createTransaction(t, p, `{"amount": 2000, "type": "income", "category": "salary", "description": "Salary", "date": "2025-05-01", "account_id": 1}`)
+	createTransaction(t, p, `{"amount": 500, "type": "expense", "category": "rent", "description": "Rent", "date": "2025-05-05", "account_id": 1}`)
+
+	// Transactions in Savings Account.
+	createTransaction(t, p, fmt.Sprintf(`{"amount": 1000, "type": "income", "category": "transfer", "description": "Savings deposit", "date": "2025-05-10", "account_id": %d}`, savingsID))
+
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "GET",
+		Path:   "/reports/summary",
+		Query:  map[string]string{"month": "2025-05"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d. Body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	data := parseDataObject(t, resp)
+	var summary reports.MonthlySummary
+	if err := json.Unmarshal(data, &summary); err != nil {
+		t.Fatalf("failed to parse summary: %v", err)
+	}
+
+	// Should have 2 accounts.
+	if len(summary.ByAccount) != 2 {
+		t.Fatalf("expected 2 accounts, got %d", len(summary.ByAccount))
+	}
+
+	// Find each account in the results.
+	accountTotals := make(map[string]float64)
+	for _, a := range summary.ByAccount {
+		accountTotals[a.AccountName] = a.Total
+	}
+
+	// Main Account: 2000 income - 500 expense = 1500.
+	if total, ok := accountTotals["Main Account"]; !ok || total != 1500 {
+		t.Errorf("expected Main Account total 1500, got %f (exists=%v)", total, ok)
+	}
+	// Savings: 1000 income, 0 expense = 1000.
+	if total, ok := accountTotals["Savings"]; !ok || total != 1000 {
+		t.Errorf("expected Savings total 1000, got %f (exists=%v)", total, ok)
+	}
+}
+
+func TestTrends_SixMonthRange(t *testing.T) {
+	p := newTestPlugin(t)
+
+	// Create transactions across 6 months.
+	months := []struct {
+		month   string
+		income  float64
+		expense float64
+	}{
+		{"2025-01", 3000, 1000},
+		{"2025-02", 3000, 1200},
+		{"2025-03", 3500, 1500},
+		{"2025-04", 3000, 1100},
+		// 2025-05: no transactions (should appear as zeros).
+		{"2025-06", 4000, 2000},
+	}
+
+	for _, m := range months {
+		createTransaction(t, p, fmt.Sprintf(
+			`{"amount": %f, "type": "income", "category": "salary", "description": "Salary", "date": "%s-15"}`,
+			m.income, m.month,
+		))
+		createTransaction(t, p, fmt.Sprintf(
+			`{"amount": %f, "type": "expense", "category": "rent", "description": "Rent", "date": "%s-15"}`,
+			m.expense, m.month,
+		))
+	}
+
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "GET",
+		Path:   "/reports/trends",
+		Query:  map[string]string{"from": "2025-01", "to": "2025-06"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d. Body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	data := parseDataObject(t, resp)
+	var trends []reports.TrendPoint
+	if err := json.Unmarshal(data, &trends); err != nil {
+		t.Fatalf("failed to parse trends: %v", err)
+	}
+
+	// Should have exactly 6 months.
+	if len(trends) != 6 {
+		t.Fatalf("expected 6 trend points, got %d", len(trends))
+	}
+
+	// Check first month.
+	if trends[0].Month != "2025-01" {
+		t.Errorf("expected first month '2025-01', got %q", trends[0].Month)
+	}
+	if trends[0].Income != 3000 || trends[0].Expense != 1000 {
+		t.Errorf("Jan: expected income=3000, expense=1000, got income=%f, expense=%f", trends[0].Income, trends[0].Expense)
+	}
+	if trends[0].Balance != 2000 {
+		t.Errorf("Jan: expected balance 2000, got %f", trends[0].Balance)
+	}
+
+	// May should be zero-filled.
+	if trends[4].Month != "2025-05" {
+		t.Errorf("expected fifth month '2025-05', got %q", trends[4].Month)
+	}
+	if trends[4].Income != 0 || trends[4].Expense != 0 || trends[4].Balance != 0 {
+		t.Errorf("May: expected all zeros, got income=%f, expense=%f, balance=%f", trends[4].Income, trends[4].Expense, trends[4].Balance)
+	}
+
+	// June check.
+	if trends[5].Month != "2025-06" {
+		t.Errorf("expected sixth month '2025-06', got %q", trends[5].Month)
+	}
+	if trends[5].Income != 4000 || trends[5].Expense != 2000 {
+		t.Errorf("Jun: expected income=4000, expense=2000, got income=%f, expense=%f", trends[5].Income, trends[5].Expense)
+	}
+}
+
+func TestCategoryComparison_WithPreviousMonth(t *testing.T) {
+	p := newTestPlugin(t)
+
+	// Previous month (Feb) expenses.
+	createTransaction(t, p, `{"amount": 1000, "type": "expense", "category": "rent", "description": "Rent", "date": "2025-02-01"}`)
+	createTransaction(t, p, `{"amount": 400, "type": "expense", "category": "food", "description": "Groceries", "date": "2025-02-10"}`)
+
+	// Current month (Mar) expenses.
+	createTransaction(t, p, `{"amount": 1100, "type": "expense", "category": "rent", "description": "Rent", "date": "2025-03-01"}`)
+	createTransaction(t, p, `{"amount": 300, "type": "expense", "category": "food", "description": "Groceries", "date": "2025-03-10"}`)
+	createTransaction(t, p, `{"amount": 200, "type": "expense", "category": "transport", "description": "Metro", "date": "2025-03-15"}`)
+
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "GET",
+		Path:   "/reports/categories",
+		Query:  map[string]string{"month": "2025-03"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d. Body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	data := parseDataObject(t, resp)
+	var comparisons []reports.CategoryComparison
+	if err := json.Unmarshal(data, &comparisons); err != nil {
+		t.Fatalf("failed to parse comparisons: %v", err)
+	}
+
+	// Should have 3 categories: rent, food, transport.
+	if len(comparisons) != 3 {
+		t.Fatalf("expected 3 category comparisons, got %d", len(comparisons))
+	}
+
+	compMap := make(map[string]reports.CategoryComparison)
+	for _, c := range comparisons {
+		compMap[c.Category] = c
+	}
+
+	// Rent: 1100 current, 1000 previous, change = +10%.
+	rent := compMap["rent"]
+	if rent.CurrentMonth != 1100 || rent.PreviousMonth != 1000 {
+		t.Errorf("rent: expected current=1100, previous=1000, got current=%f, previous=%f", rent.CurrentMonth, rent.PreviousMonth)
+	}
+	if math.Abs(rent.Change-10.0) > 0.01 {
+		t.Errorf("rent: expected change ~10%%, got %f", rent.Change)
+	}
+
+	// Food: 300 current, 400 previous, change = -25%.
+	food := compMap["food"]
+	if food.CurrentMonth != 300 || food.PreviousMonth != 400 {
+		t.Errorf("food: expected current=300, previous=400, got current=%f, previous=%f", food.CurrentMonth, food.PreviousMonth)
+	}
+	if math.Abs(food.Change-(-25.0)) > 0.01 {
+		t.Errorf("food: expected change ~-25%%, got %f", food.Change)
+	}
+
+	// Transport: 200 current, 0 previous, change = 0 (div by zero guard).
+	transport := compMap["transport"]
+	if transport.CurrentMonth != 200 || transport.PreviousMonth != 0 {
+		t.Errorf("transport: expected current=200, previous=0, got current=%f, previous=%f", transport.CurrentMonth, transport.PreviousMonth)
+	}
+	if transport.Change != 0 {
+		t.Errorf("transport: expected change 0 (div by zero), got %f", transport.Change)
+	}
+}
+
+func TestNetWorth_AccountsAndInvestments(t *testing.T) {
+	p := newTestPlugin(t)
+
+	// Create transactions for accounts total.
+	createTransaction(t, p, `{"amount": 5000, "type": "income", "category": "salary", "description": "Salary", "date": "2025-01-15"}`)
+	createTransaction(t, p, `{"amount": 1500, "type": "expense", "category": "rent", "description": "Rent", "date": "2025-01-20"}`)
+	createTransaction(t, p, `{"amount": 2000, "type": "income", "category": "freelance", "description": "Project", "date": "2025-02-15"}`)
+	createTransaction(t, p, `{"amount": 800, "type": "expense", "category": "food", "description": "Groceries", "date": "2025-02-20"}`)
+	// Accounts total = 5000 - 1500 + 2000 - 800 = 4700.
+
+	// Create investments.
+	units10 := 10.0
+	buyPrice100 := 100.0
+	currentPrice115 := 115.0
+	units5 := 5.0
+	buyPrice200 := 200.0
+	currentPrice250 := 250.0
+
+	createInvestment(t, p, fmt.Sprintf(
+		`{"name": "ETF World", "type": "etf", "currency": "EUR", "units": %f, "avg_buy_price": %f, "current_price": %f}`,
+		units10, buyPrice100, currentPrice115,
+	))
+	createInvestment(t, p, fmt.Sprintf(
+		`{"name": "Tech Stock", "type": "stock", "currency": "EUR", "units": %f, "avg_buy_price": %f, "current_price": %f}`,
+		units5, buyPrice200, currentPrice250,
+	))
+	// Investment without units/price (should be excluded from total).
+	createInvestment(t, p, `{"name": "Watchlist", "type": "crypto", "currency": "EUR"}`)
+	// Investments total = (10 * 115) + (5 * 250) = 1150 + 1250 = 2400.
+
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "GET",
+		Path:   "/reports/net-worth",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d. Body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	data := parseDataObject(t, resp)
+	var nw reports.NetWorth
+	if err := json.Unmarshal(data, &nw); err != nil {
+		t.Fatalf("failed to parse net worth: %v", err)
+	}
+
+	if nw.AccountsTotal != 4700 {
+		t.Errorf("expected accounts total 4700, got %f", nw.AccountsTotal)
+	}
+	if nw.InvestmentsTotal != 2400 {
+		t.Errorf("expected investments total 2400, got %f", nw.InvestmentsTotal)
+	}
+	if nw.NetWorth != 7100 {
+		t.Errorf("expected net worth 7100, got %f", nw.NetWorth)
 	}
 }
