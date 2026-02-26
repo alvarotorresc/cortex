@@ -13,8 +13,10 @@ import (
 	"github.com/alvarotorresc/cortex/pkg/sdk"
 	"github.com/alvarotorresc/cortex/plugins/finance-tracker/backend/accounts"
 	"github.com/alvarotorresc/cortex/plugins/finance-tracker/backend/categories"
+	"github.com/alvarotorresc/cortex/plugins/finance-tracker/backend/recurring"
 	"github.com/alvarotorresc/cortex/plugins/finance-tracker/backend/shared"
 	"github.com/alvarotorresc/cortex/plugins/finance-tracker/backend/tags"
+	"github.com/alvarotorresc/cortex/plugins/finance-tracker/backend/transactions"
 )
 
 //go:embed migrations/*.sql
@@ -22,10 +24,12 @@ var migrations embed.FS
 
 // FinancePlugin implements sdk.CortexPlugin for personal finance tracking.
 type FinancePlugin struct {
-	db                *sql.DB
-	accountsHandler   *accounts.Handler
-	categoriesHandler *categories.Handler
-	tagsHandler       *tags.Handler
+	db                  *sql.DB
+	accountsHandler     *accounts.Handler
+	categoriesHandler   *categories.Handler
+	tagsHandler         *tags.Handler
+	transactionsHandler *transactions.Handler
+	recurringHandler    *recurring.Handler
 }
 
 // GetManifest returns the plugin's metadata.
@@ -100,6 +104,8 @@ func (p *FinancePlugin) Migrate(databasePath string) error {
 	p.accountsHandler = accounts.NewHandler(p.db)
 	p.categoriesHandler = categories.NewHandler(p.db)
 	p.tagsHandler = tags.NewHandler(p.db)
+	p.transactionsHandler = transactions.NewHandler(p.db)
+	p.recurringHandler = recurring.NewHandler(p.db)
 
 	return nil
 }
@@ -107,12 +113,8 @@ func (p *FinancePlugin) Migrate(databasePath string) error {
 // HandleAPI routes incoming API requests to the appropriate handler.
 func (p *FinancePlugin) HandleAPI(req *sdk.APIRequest) (*sdk.APIResponse, error) {
 	switch {
-	case req.Method == "GET" && req.Path == "/transactions":
-		return p.listTransactions(req)
-	case req.Method == "POST" && req.Path == "/transactions":
-		return p.createTransaction(req)
-	case req.Method == "DELETE" && strings.HasPrefix(req.Path, "/transactions/"):
-		return p.deleteTransaction(req)
+	case strings.HasPrefix(req.Path, "/transactions"):
+		return p.transactionsHandler.Handle(req)
 	case strings.HasPrefix(req.Path, "/categories"):
 		return p.categoriesHandler.Handle(req)
 	case req.Method == "GET" && req.Path == "/summary":
@@ -121,8 +123,10 @@ func (p *FinancePlugin) HandleAPI(req *sdk.APIRequest) (*sdk.APIResponse, error)
 		return p.accountsHandler.Handle(req)
 	case strings.HasPrefix(req.Path, "/tags"):
 		return p.tagsHandler.Handle(req)
+	case strings.HasPrefix(req.Path, "/recurring"):
+		return p.recurringHandler.Handle(req)
 	default:
-		return jsonError(404, "NOT_FOUND", "route not found")
+		return shared.JSONError(shared.NewAppError("NOT_FOUND", "route not found", 404))
 	}
 }
 
@@ -163,18 +167,7 @@ func (p *FinancePlugin) Teardown() error {
 	return nil
 }
 
-// --- Data types ---
-
-// Transaction represents a financial transaction record.
-type Transaction struct {
-	ID          int64   `json:"id"`
-	Amount      float64 `json:"amount"`
-	Type        string  `json:"type"`
-	Category    string  `json:"category"`
-	Description string  `json:"description"`
-	Date        string  `json:"date"`
-	CreatedAt   string  `json:"created_at"`
-}
+// --- Data types kept temporarily for getSummary ---
 
 // CategorySummary represents aggregated spending per category.
 type CategorySummary struct {
@@ -182,108 +175,8 @@ type CategorySummary struct {
 	Total    float64 `json:"total"`
 }
 
-// --- Handlers ---
-
-func (p *FinancePlugin) listTransactions(req *sdk.APIRequest) (*sdk.APIResponse, error) {
-	month := req.Query["month"]
-	if month == "" {
-		month = time.Now().Format("2006-01")
-	}
-
-	rows, err := p.db.Query(
-		`SELECT id, amount, type, category, description, date, created_at
-		 FROM transactions
-		 WHERE date LIKE ?
-		 ORDER BY date DESC, id DESC`,
-		month+"%",
-	)
-	if err != nil {
-		return nil, fmt.Errorf("querying transactions: %w", err)
-	}
-	defer rows.Close()
-
-	transactions := make([]Transaction, 0)
-	for rows.Next() {
-		var t Transaction
-		if err := rows.Scan(&t.ID, &t.Amount, &t.Type, &t.Category, &t.Description, &t.Date, &t.CreatedAt); err != nil {
-			return nil, fmt.Errorf("scanning transaction: %w", err)
-		}
-		transactions = append(transactions, t)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterating transactions: %w", err)
-	}
-
-	return jsonSuccess(200, transactions)
-}
-
-func (p *FinancePlugin) createTransaction(req *sdk.APIRequest) (*sdk.APIResponse, error) {
-	var input struct {
-		Amount      float64 `json:"amount"`
-		Type        string  `json:"type"`
-		Category    string  `json:"category"`
-		Description string  `json:"description"`
-		Date        string  `json:"date"`
-	}
-
-	if err := json.Unmarshal(req.Body, &input); err != nil {
-		return jsonError(400, "VALIDATION_ERROR", "invalid JSON body")
-	}
-
-	// Validate amount
-	if input.Amount <= 0 {
-		return jsonError(400, "VALIDATION_ERROR", "amount must be greater than 0")
-	}
-
-	// Validate type enum
-	if input.Type != "income" && input.Type != "expense" {
-		return jsonError(400, "VALIDATION_ERROR", "type must be 'income' or 'expense'")
-	}
-
-	// Validate category is not empty
-	if strings.TrimSpace(input.Category) == "" {
-		return jsonError(400, "VALIDATION_ERROR", "category is required")
-	}
-
-	// Default date to today
-	if input.Date == "" {
-		input.Date = time.Now().Format("2006-01-02")
-	}
-
-	result, err := p.db.Exec(
-		"INSERT INTO transactions (amount, type, category, description, date) VALUES (?, ?, ?, ?, ?)",
-		input.Amount, input.Type, input.Category, input.Description, input.Date,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("inserting transaction: %w", err)
-	}
-
-	id, _ := result.LastInsertId()
-	return jsonSuccess(201, map[string]interface{}{"id": id})
-}
-
-func (p *FinancePlugin) deleteTransaction(req *sdk.APIRequest) (*sdk.APIResponse, error) {
-	// Extract ID from path: /transactions/{id}
-	parts := strings.Split(strings.TrimPrefix(req.Path, "/"), "/")
-	if len(parts) < 2 || parts[1] == "" {
-		return jsonError(400, "VALIDATION_ERROR", "missing transaction ID")
-	}
-	id := parts[1]
-
-	result, err := p.db.Exec("DELETE FROM transactions WHERE id = ?", id)
-	if err != nil {
-		return nil, fmt.Errorf("deleting transaction: %w", err)
-	}
-
-	rowsAffected, _ := result.RowsAffected()
-	if rowsAffected == 0 {
-		return jsonError(404, "NOT_FOUND", "transaction not found")
-	}
-
-	return jsonSuccess(200, map[string]interface{}{"deleted": id})
-}
-
+// getSummary returns spending aggregated by category for a given month.
+// NOTE: This will be replaced by the reports module in a future task.
 func (p *FinancePlugin) getSummary(req *sdk.APIRequest) (*sdk.APIResponse, error) {
 	month := req.Query["month"]
 	if month == "" {
@@ -316,35 +209,5 @@ func (p *FinancePlugin) getSummary(req *sdk.APIRequest) (*sdk.APIResponse, error
 		return nil, fmt.Errorf("iterating summary: %w", err)
 	}
 
-	return jsonSuccess(200, summaries)
-}
-
-// --- JSON response helpers ---
-
-// jsonSuccess wraps data in `{ "data": ... }` format per PATTERNS.md.
-func jsonSuccess(status int, data interface{}) (*sdk.APIResponse, error) {
-	body, err := json.Marshal(map[string]interface{}{"data": data})
-	if err != nil {
-		return nil, fmt.Errorf("marshaling response: %w", err)
-	}
-	return &sdk.APIResponse{
-		StatusCode:  status,
-		Body:        body,
-		ContentType: "application/json",
-	}, nil
-}
-
-// jsonError wraps errors in `{ "error": { "code": ..., "message": ... } }` format per PATTERNS.md.
-func jsonError(status int, code string, message string) (*sdk.APIResponse, error) {
-	body, _ := json.Marshal(map[string]interface{}{
-		"error": map[string]interface{}{
-			"code":    code,
-			"message": message,
-		},
-	})
-	return &sdk.APIResponse{
-		StatusCode:  status,
-		Body:        body,
-		ContentType: "application/json",
-	}, nil
+	return shared.JSONSuccess(200, summaries)
 }

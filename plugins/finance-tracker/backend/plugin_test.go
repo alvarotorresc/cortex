@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/alvarotorresc/cortex/pkg/sdk"
+	"github.com/alvarotorresc/cortex/plugins/finance-tracker/backend/recurring"
+	"github.com/alvarotorresc/cortex/plugins/finance-tracker/backend/transactions"
 )
 
 // newTestPlugin creates a FinancePlugin with a migrated SQLite database in a temp directory.
@@ -66,6 +68,85 @@ func parseDataObject(t *testing.T, resp *sdk.APIResponse) json.RawMessage {
 		t.Fatalf("failed to parse response body: %v", err)
 	}
 	return body.Data
+}
+
+// createTransaction is a test helper that creates a transaction via the API and returns the ID.
+func createTransaction(t *testing.T, p *FinancePlugin, body string) int64 {
+	t.Helper()
+
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "POST",
+		Path:   "/transactions",
+		Body:   []byte(body),
+	})
+	if err != nil {
+		t.Fatalf("create transaction failed: %v", err)
+	}
+	if resp.StatusCode != 201 {
+		t.Fatalf("expected 201, got %d. Body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	data := parseDataObject(t, resp)
+	var tx struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.Unmarshal(data, &tx); err != nil {
+		t.Fatalf("failed to parse created transaction: %v", err)
+	}
+	return tx.ID
+}
+
+// createTag is a test helper that creates a tag via the API and returns the ID.
+func createTag(t *testing.T, p *FinancePlugin, name string, color string) int64 {
+	t.Helper()
+
+	body := fmt.Sprintf(`{"name":"%s","color":"%s"}`, name, color)
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "POST",
+		Path:   "/tags",
+		Body:   []byte(body),
+	})
+	if err != nil {
+		t.Fatalf("create tag failed: %v", err)
+	}
+	if resp.StatusCode != 201 {
+		t.Fatalf("expected 201, got %d. Body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	data := parseDataObject(t, resp)
+	var tag struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.Unmarshal(data, &tag); err != nil {
+		t.Fatalf("failed to parse created tag: %v", err)
+	}
+	return tag.ID
+}
+
+// createAccount is a test helper that creates an account via the API and returns the ID.
+func createAccount(t *testing.T, p *FinancePlugin, body string) int64 {
+	t.Helper()
+
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "POST",
+		Path:   "/accounts",
+		Body:   []byte(body),
+	})
+	if err != nil {
+		t.Fatalf("create account failed: %v", err)
+	}
+	if resp.StatusCode != 201 {
+		t.Fatalf("expected 201, got %d. Body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	data := parseDataObject(t, resp)
+	var acct struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.Unmarshal(data, &acct); err != nil {
+		t.Fatalf("failed to parse created account: %v", err)
+	}
+	return acct.ID
 }
 
 // --- Tests ---
@@ -135,7 +216,7 @@ func TestCreateTransaction_Valid(t *testing.T) {
 		t.Fatalf("expected 1 transaction, got %d", len(items))
 	}
 
-	var tx Transaction
+	var tx transactions.Transaction
 	if err := json.Unmarshal(items[0], &tx); err != nil {
 		t.Fatalf("failed to unmarshal transaction: %v", err)
 	}
@@ -144,6 +225,9 @@ func TestCreateTransaction_Valid(t *testing.T) {
 	}
 	if tx.Type != "income" {
 		t.Errorf("expected type 'income', got '%s'", tx.Type)
+	}
+	if tx.AccountID != 1 {
+		t.Errorf("expected default account_id 1, got %d", tx.AccountID)
 	}
 }
 
@@ -258,31 +342,12 @@ func TestDeleteTransaction(t *testing.T) {
 	p := newTestPlugin(t)
 
 	// Create a transaction.
-	createBody := `{"amount": 200, "type": "expense", "category": "transport", "date": "2026-02-15"}`
-	createResp, err := p.HandleAPI(&sdk.APIRequest{
-		Method: "POST",
-		Path:   "/transactions",
-		Body:   []byte(createBody),
-	})
-	if err != nil {
-		t.Fatalf("create failed: %v", err)
-	}
-
-	var createData struct {
-		Data struct {
-			ID int64 `json:"id"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(createResp.Body, &createData); err != nil {
-		t.Fatalf("failed to parse create response: %v", err)
-	}
-
-	txID := fmt.Sprintf("%d", createData.Data.ID)
+	txID := createTransaction(t, p, `{"amount": 200, "type": "expense", "category": "transport", "date": "2026-02-15"}`)
 
 	// Delete the transaction.
 	delResp, err := p.HandleAPI(&sdk.APIRequest{
 		Method: "DELETE",
-		Path:   "/transactions/" + txID,
+		Path:   fmt.Sprintf("/transactions/%d", txID),
 	})
 	if err != nil {
 		t.Fatalf("delete failed: %v", err)
@@ -305,6 +370,468 @@ func TestDeleteTransaction(t *testing.T) {
 	items := parseDataArray(t, listResp)
 	if len(items) != 0 {
 		t.Errorf("expected 0 transactions after delete, got %d", len(items))
+	}
+}
+
+// --- Transaction v2 tests ---
+
+func TestCreateTransaction_WithAccount(t *testing.T) {
+	p := newTestPlugin(t)
+
+	// Create a second account.
+	acctID := createAccount(t, p, `{"name":"Savings","type":"savings","currency":"EUR"}`)
+
+	// Create a transaction linked to that account.
+	body := fmt.Sprintf(`{"amount":500,"type":"income","category":"salary","date":"2026-02-01","account_id":%d}`, acctID)
+	txID := createTransaction(t, p, body)
+
+	// Verify the transaction has the correct account_id.
+	listResp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "GET",
+		Path:   "/transactions",
+		Query:  map[string]string{"month": "2026-02"},
+	})
+	if err != nil {
+		t.Fatalf("list returned error: %v", err)
+	}
+
+	items := parseDataArray(t, listResp)
+	var found bool
+	for _, raw := range items {
+		var tx transactions.Transaction
+		if err := json.Unmarshal(raw, &tx); err != nil {
+			t.Fatalf("failed to unmarshal: %v", err)
+		}
+		if tx.ID == txID {
+			found = true
+			if tx.AccountID != acctID {
+				t.Errorf("expected account_id %d, got %d", acctID, tx.AccountID)
+			}
+		}
+	}
+	if !found {
+		t.Error("created transaction not found in list")
+	}
+}
+
+func TestCreateTransaction_DefaultAccount(t *testing.T) {
+	p := newTestPlugin(t)
+
+	// Create without account_id — should default to 1.
+	body := `{"amount":100,"type":"expense","category":"groceries","date":"2026-02-01"}`
+	txID := createTransaction(t, p, body)
+
+	listResp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "GET",
+		Path:   "/transactions",
+		Query:  map[string]string{"month": "2026-02"},
+	})
+	if err != nil {
+		t.Fatalf("list returned error: %v", err)
+	}
+
+	items := parseDataArray(t, listResp)
+	for _, raw := range items {
+		var tx transactions.Transaction
+		if err := json.Unmarshal(raw, &tx); err != nil {
+			t.Fatalf("failed to unmarshal: %v", err)
+		}
+		if tx.ID == txID && tx.AccountID != 1 {
+			t.Errorf("expected default account_id 1, got %d", tx.AccountID)
+		}
+	}
+}
+
+func TestCreateTransaction_Transfer(t *testing.T) {
+	p := newTestPlugin(t)
+
+	// Create a second account for the transfer destination.
+	destID := createAccount(t, p, `{"name":"Savings","type":"savings","currency":"EUR"}`)
+
+	body := fmt.Sprintf(
+		`{"amount":1000,"type":"transfer","category":"","description":"Monthly savings","date":"2026-02-01","account_id":1,"dest_account_id":%d}`,
+		destID,
+	)
+	txID := createTransaction(t, p, body)
+
+	// Verify the transaction.
+	listResp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "GET",
+		Path:   "/transactions",
+		Query:  map[string]string{"month": "2026-02"},
+	})
+	if err != nil {
+		t.Fatalf("list returned error: %v", err)
+	}
+
+	items := parseDataArray(t, listResp)
+	for _, raw := range items {
+		var tx transactions.Transaction
+		if err := json.Unmarshal(raw, &tx); err != nil {
+			t.Fatalf("failed to unmarshal: %v", err)
+		}
+		if tx.ID == txID {
+			if tx.Type != "transfer" {
+				t.Errorf("expected type 'transfer', got '%s'", tx.Type)
+			}
+			if tx.DestAccountID == nil || *tx.DestAccountID != destID {
+				t.Errorf("expected dest_account_id %d, got %v", destID, tx.DestAccountID)
+			}
+		}
+	}
+}
+
+func TestCreateTransaction_TransferMissingDest(t *testing.T) {
+	p := newTestPlugin(t)
+
+	body := `{"amount":500,"type":"transfer","category":"","date":"2026-02-01","account_id":1}`
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "POST",
+		Path:   "/transactions",
+		Body:   []byte(body),
+	})
+	if err != nil {
+		t.Fatalf("HandleAPI returned error: %v", err)
+	}
+	if resp.StatusCode != 400 {
+		t.Fatalf("expected 400, got %d. Body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	code, _ := parseErrorResponse(t, resp)
+	if code != "VALIDATION_ERROR" {
+		t.Errorf("expected VALIDATION_ERROR, got '%s'", code)
+	}
+}
+
+func TestUpdateTransaction(t *testing.T) {
+	p := newTestPlugin(t)
+
+	txID := createTransaction(t, p, `{"amount":100,"type":"expense","category":"groceries","description":"Weekly shop","date":"2026-02-01"}`)
+
+	// Update amount, category, and description.
+	updateBody := `{"amount":150,"type":"expense","category":"transport","description":"Taxi ride","date":"2026-02-01"}`
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "PUT",
+		Path:   fmt.Sprintf("/transactions/%d", txID),
+		Body:   []byte(updateBody),
+	})
+	if err != nil {
+		t.Fatalf("update returned error: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d. Body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	// Verify the update.
+	data := parseDataObject(t, resp)
+	var tx transactions.Transaction
+	if err := json.Unmarshal(data, &tx); err != nil {
+		t.Fatalf("failed to unmarshal updated transaction: %v", err)
+	}
+	if tx.Amount != 150 {
+		t.Errorf("expected amount 150, got %f", tx.Amount)
+	}
+	if tx.Category != "transport" {
+		t.Errorf("expected category 'transport', got '%s'", tx.Category)
+	}
+	if tx.Description != "Taxi ride" {
+		t.Errorf("expected description 'Taxi ride', got '%s'", tx.Description)
+	}
+}
+
+func TestDeleteTransaction_V2(t *testing.T) {
+	p := newTestPlugin(t)
+
+	txID := createTransaction(t, p, `{"amount":75,"type":"expense","category":"entertainment","date":"2026-02-10"}`)
+
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "DELETE",
+		Path:   fmt.Sprintf("/transactions/%d", txID),
+	})
+	if err != nil {
+		t.Fatalf("delete returned error: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d. Body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	// Verify deletion.
+	listResp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "GET",
+		Path:   "/transactions",
+		Query:  map[string]string{"month": "2026-02"},
+	})
+	if err != nil {
+		t.Fatalf("list returned error: %v", err)
+	}
+
+	items := parseDataArray(t, listResp)
+	if len(items) != 0 {
+		t.Errorf("expected 0 transactions, got %d", len(items))
+	}
+}
+
+func TestDeleteTransaction_NotFound(t *testing.T) {
+	p := newTestPlugin(t)
+
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "DELETE",
+		Path:   "/transactions/999",
+	})
+	if err != nil {
+		t.Fatalf("HandleAPI returned error: %v", err)
+	}
+	if resp.StatusCode != 404 {
+		t.Fatalf("expected 404, got %d", resp.StatusCode)
+	}
+
+	code, _ := parseErrorResponse(t, resp)
+	if code != "NOT_FOUND" {
+		t.Errorf("expected NOT_FOUND, got '%s'", code)
+	}
+}
+
+func TestListTransactions_FilterByAccount(t *testing.T) {
+	p := newTestPlugin(t)
+
+	// Create a second account.
+	acctID := createAccount(t, p, `{"name":"Cash","type":"cash","currency":"EUR"}`)
+
+	// Create transactions on different accounts.
+	createTransaction(t, p, `{"amount":100,"type":"expense","category":"groceries","date":"2026-02-01","account_id":1}`)
+	createTransaction(t, p, fmt.Sprintf(`{"amount":50,"type":"expense","category":"transport","date":"2026-02-01","account_id":%d}`, acctID))
+
+	// Filter by the second account.
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "GET",
+		Path:   "/transactions",
+		Query:  map[string]string{"account": fmt.Sprintf("%d", acctID)},
+	})
+	if err != nil {
+		t.Fatalf("list returned error: %v", err)
+	}
+
+	items := parseDataArray(t, resp)
+	if len(items) != 1 {
+		t.Fatalf("expected 1 transaction for account %d, got %d", acctID, len(items))
+	}
+
+	var tx transactions.Transaction
+	if err := json.Unmarshal(items[0], &tx); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+	if tx.AccountID != acctID {
+		t.Errorf("expected account_id %d, got %d", acctID, tx.AccountID)
+	}
+}
+
+func TestListTransactions_FilterByCategory(t *testing.T) {
+	p := newTestPlugin(t)
+
+	createTransaction(t, p, `{"amount":100,"type":"expense","category":"groceries","date":"2026-02-01"}`)
+	createTransaction(t, p, `{"amount":50,"type":"expense","category":"transport","date":"2026-02-01"}`)
+	createTransaction(t, p, `{"amount":200,"type":"expense","category":"groceries","date":"2026-02-05"}`)
+
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "GET",
+		Path:   "/transactions",
+		Query:  map[string]string{"category": "groceries"},
+	})
+	if err != nil {
+		t.Fatalf("list returned error: %v", err)
+	}
+
+	items := parseDataArray(t, resp)
+	if len(items) != 2 {
+		t.Fatalf("expected 2 groceries transactions, got %d", len(items))
+	}
+
+	for _, raw := range items {
+		var tx transactions.Transaction
+		if err := json.Unmarshal(raw, &tx); err != nil {
+			t.Fatalf("failed to unmarshal: %v", err)
+		}
+		if tx.Category != "groceries" {
+			t.Errorf("expected category 'groceries', got '%s'", tx.Category)
+		}
+	}
+}
+
+func TestListTransactions_FilterByType(t *testing.T) {
+	p := newTestPlugin(t)
+
+	createTransaction(t, p, `{"amount":3000,"type":"income","category":"salary","date":"2026-02-01"}`)
+	createTransaction(t, p, `{"amount":100,"type":"expense","category":"groceries","date":"2026-02-01"}`)
+	createTransaction(t, p, `{"amount":50,"type":"expense","category":"transport","date":"2026-02-02"}`)
+
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "GET",
+		Path:   "/transactions",
+		Query:  map[string]string{"type": "income"},
+	})
+	if err != nil {
+		t.Fatalf("list returned error: %v", err)
+	}
+
+	items := parseDataArray(t, resp)
+	if len(items) != 1 {
+		t.Fatalf("expected 1 income transaction, got %d", len(items))
+	}
+
+	var tx transactions.Transaction
+	if err := json.Unmarshal(items[0], &tx); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+	if tx.Type != "income" {
+		t.Errorf("expected type 'income', got '%s'", tx.Type)
+	}
+}
+
+func TestListTransactions_SearchDescription(t *testing.T) {
+	p := newTestPlugin(t)
+
+	createTransaction(t, p, `{"amount":3000,"type":"income","category":"salary","description":"Monthly salary from ACME","date":"2026-02-01"}`)
+	createTransaction(t, p, `{"amount":100,"type":"expense","category":"groceries","description":"Supermarket run","date":"2026-02-02"}`)
+
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "GET",
+		Path:   "/transactions",
+		Query:  map[string]string{"search": "salary"},
+	})
+	if err != nil {
+		t.Fatalf("list returned error: %v", err)
+	}
+
+	items := parseDataArray(t, resp)
+	if len(items) != 1 {
+		t.Fatalf("expected 1 transaction matching 'salary', got %d", len(items))
+	}
+
+	var tx transactions.Transaction
+	if err := json.Unmarshal(items[0], &tx); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+	if tx.Amount != 3000 {
+		t.Errorf("expected the salary transaction (3000), got amount %f", tx.Amount)
+	}
+}
+
+func TestListTransactions_FilterByTag(t *testing.T) {
+	p := newTestPlugin(t)
+
+	tagID := createTag(t, p, "vacation", "#3B82F6")
+
+	// Create two transactions, only one with the tag.
+	taggedBody := fmt.Sprintf(`{"amount":500,"type":"expense","category":"entertainment","date":"2026-02-01","tag_ids":[%d]}`, tagID)
+	createTransaction(t, p, taggedBody)
+	createTransaction(t, p, `{"amount":100,"type":"expense","category":"groceries","date":"2026-02-02"}`)
+
+	// Filter by tag.
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "GET",
+		Path:   "/transactions",
+		Query:  map[string]string{"tag": fmt.Sprintf("%d", tagID)},
+	})
+	if err != nil {
+		t.Fatalf("list returned error: %v", err)
+	}
+
+	items := parseDataArray(t, resp)
+	if len(items) != 1 {
+		t.Fatalf("expected 1 tagged transaction, got %d", len(items))
+	}
+
+	var tx transactions.Transaction
+	if err := json.Unmarshal(items[0], &tx); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+	if tx.Amount != 500 {
+		t.Errorf("expected the tagged transaction (500), got amount %f", tx.Amount)
+	}
+}
+
+func TestCreateTransaction_WithTags(t *testing.T) {
+	p := newTestPlugin(t)
+
+	tag1 := createTag(t, p, "recurring", "#EF4444")
+	tag2 := createTag(t, p, "essential", "#10B981")
+
+	body := fmt.Sprintf(
+		`{"amount":1500,"type":"income","category":"salary","description":"Monthly salary","date":"2026-02-01","tag_ids":[%d,%d]}`,
+		tag1, tag2,
+	)
+
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "POST",
+		Path:   "/transactions",
+		Body:   []byte(body),
+	})
+	if err != nil {
+		t.Fatalf("HandleAPI returned error: %v", err)
+	}
+	if resp.StatusCode != 201 {
+		t.Fatalf("expected 201, got %d. Body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	// Parse the created transaction and verify tags.
+	data := parseDataObject(t, resp)
+	var tx transactions.Transaction
+	if err := json.Unmarshal(data, &tx); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+
+	if len(tx.Tags) != 2 {
+		t.Fatalf("expected 2 tags, got %d", len(tx.Tags))
+	}
+
+	tagNames := map[string]bool{}
+	for _, tag := range tx.Tags {
+		tagNames[tag.Name] = true
+	}
+	if !tagNames["recurring"] {
+		t.Error("expected tag 'recurring' in transaction tags")
+	}
+	if !tagNames["essential"] {
+		t.Error("expected tag 'essential' in transaction tags")
+	}
+}
+
+func TestUpdateTransaction_ChangeTags(t *testing.T) {
+	p := newTestPlugin(t)
+
+	tag1 := createTag(t, p, "old-tag", "#EF4444")
+	tag2 := createTag(t, p, "new-tag", "#10B981")
+
+	// Create with tag1.
+	body := fmt.Sprintf(`{"amount":100,"type":"expense","category":"groceries","date":"2026-02-01","tag_ids":[%d]}`, tag1)
+	txID := createTransaction(t, p, body)
+
+	// Update to tag2.
+	updateBody := fmt.Sprintf(`{"amount":100,"type":"expense","category":"groceries","date":"2026-02-01","tag_ids":[%d]}`, tag2)
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "PUT",
+		Path:   fmt.Sprintf("/transactions/%d", txID),
+		Body:   []byte(updateBody),
+	})
+	if err != nil {
+		t.Fatalf("update returned error: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d. Body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	// Verify tags changed.
+	data := parseDataObject(t, resp)
+	var tx transactions.Transaction
+	if err := json.Unmarshal(data, &tx); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+
+	if len(tx.Tags) != 1 {
+		t.Fatalf("expected 1 tag after update, got %d", len(tx.Tags))
+	}
+	if tx.Tags[0].Name != "new-tag" {
+		t.Errorf("expected tag 'new-tag', got '%s'", tx.Tags[0].Name)
 	}
 }
 
@@ -707,19 +1234,11 @@ func TestDeleteCategory_HasTransactions(t *testing.T) {
 	p := newTestPlugin(t)
 
 	// "groceries" is a default category. Create a transaction referencing it.
-	txBody := `{"amount":50,"type":"expense","category":"groceries","date":"2026-02-01"}`
-	txResp, err := p.HandleAPI(&sdk.APIRequest{
-		Method: "POST",
-		Path:   "/transactions",
-		Body:   []byte(txBody),
-	})
-	if err != nil || txResp.StatusCode != 201 {
-		t.Fatalf("failed to create transaction: err=%v status=%d", err, txResp.StatusCode)
-	}
+	createTransaction(t, p, `{"amount":50,"type":"expense","category":"groceries","date":"2026-02-01"}`)
 
 	// Find the "groceries" category ID.
 	var groceriesID int64
-	err = p.db.QueryRow("SELECT id FROM categories WHERE name = 'groceries'").Scan(&groceriesID)
+	err := p.db.QueryRow("SELECT id FROM categories WHERE name = 'groceries'").Scan(&groceriesID)
 	if err != nil {
 		t.Fatalf("failed to find groceries category: %v", err)
 	}
@@ -1380,19 +1899,8 @@ func TestListAccounts_IncludesBalance(t *testing.T) {
 	p := newTestPlugin(t)
 
 	// Add income and expense transactions to the default account (id=1).
-	income := `{"amount":3000,"type":"income","category":"salary","date":"2026-02-01"}`
-	expense := `{"amount":800,"type":"expense","category":"groceries","date":"2026-02-05"}`
-
-	for _, body := range []string{income, expense} {
-		resp, err := p.HandleAPI(&sdk.APIRequest{
-			Method: "POST",
-			Path:   "/transactions",
-			Body:   []byte(body),
-		})
-		if err != nil || resp.StatusCode != 201 {
-			t.Fatalf("failed to create transaction: err=%v status=%d", err, resp.StatusCode)
-		}
-	}
+	createTransaction(t, p, `{"amount":3000,"type":"income","category":"salary","date":"2026-02-01"}`)
+	createTransaction(t, p, `{"amount":800,"type":"expense","category":"groceries","date":"2026-02-05"}`)
 
 	// List accounts with balance.
 	listResp, err := p.HandleAPI(&sdk.APIRequest{
@@ -1426,21 +1934,9 @@ func TestAccountBalance_CalculatedFromTransactions(t *testing.T) {
 	p := newTestPlugin(t)
 
 	// Create transactions: 5000 income, 1200 expense, 300 expense.
-	transactions := []string{
-		`{"amount":5000,"type":"income","category":"salary","date":"2026-02-01"}`,
-		`{"amount":1200,"type":"expense","category":"bills","date":"2026-02-03"}`,
-		`{"amount":300,"type":"expense","category":"groceries","date":"2026-02-05"}`,
-	}
-	for _, body := range transactions {
-		resp, err := p.HandleAPI(&sdk.APIRequest{
-			Method: "POST",
-			Path:   "/transactions",
-			Body:   []byte(body),
-		})
-		if err != nil || resp.StatusCode != 201 {
-			t.Fatalf("failed to create transaction: err=%v status=%d", err, resp.StatusCode)
-		}
-	}
+	createTransaction(t, p, `{"amount":5000,"type":"income","category":"salary","date":"2026-02-01"}`)
+	createTransaction(t, p, `{"amount":1200,"type":"expense","category":"bills","date":"2026-02-03"}`)
+	createTransaction(t, p, `{"amount":300,"type":"expense","category":"groceries","date":"2026-02-05"}`)
 
 	// GET /accounts/1/balance
 	resp, err := p.HandleAPI(&sdk.APIRequest{
@@ -1815,5 +2311,546 @@ func TestAccountBalance_InterestEstimation(t *testing.T) {
 	}
 	if *result.EstimatedInterest != 250.0 {
 		t.Errorf("expected estimated_interest 250.0, got %f", *result.EstimatedInterest)
+	}
+}
+
+// --- Recurring Rules Tests ---
+
+// createRecurringRule is a test helper that creates a recurring rule via the API and returns its ID.
+func createRecurringRule(t *testing.T, p *FinancePlugin, body string) int64 {
+	t.Helper()
+
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "POST",
+		Path:   "/recurring",
+		Body:   []byte(body),
+	})
+	if err != nil {
+		t.Fatalf("create recurring rule failed: %v", err)
+	}
+	if resp.StatusCode != 201 {
+		t.Fatalf("expected 201, got %d. Body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	data := parseDataObject(t, resp)
+	var rule struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.Unmarshal(data, &rule); err != nil {
+		t.Fatalf("failed to parse created rule: %v", err)
+	}
+	return rule.ID
+}
+
+// generateRecurring calls POST /recurring/generate and returns the count of generated transactions.
+func generateRecurring(t *testing.T, p *FinancePlugin) int {
+	t.Helper()
+
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "POST",
+		Path:   "/recurring/generate",
+	})
+	if err != nil {
+		t.Fatalf("generate recurring failed: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d. Body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	data := parseDataObject(t, resp)
+	var result recurring.GenerateResult
+	if err := json.Unmarshal(data, &result); err != nil {
+		t.Fatalf("failed to parse generate result: %v", err)
+	}
+	return result.Generated
+}
+
+func TestCreateRecurringRule_Monthly(t *testing.T) {
+	p := newTestPlugin(t)
+
+	body := `{
+		"amount": 50.00,
+		"type": "expense",
+		"category": "subscriptions",
+		"description": "Netflix",
+		"frequency": "monthly",
+		"day_of_month": 15,
+		"start_date": "2026-01-15"
+	}`
+
+	ruleID := createRecurringRule(t, p, body)
+	if ruleID == 0 {
+		t.Fatal("expected rule ID > 0")
+	}
+
+	// Verify it appears in the list.
+	listResp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "GET",
+		Path:   "/recurring",
+	})
+	if err != nil {
+		t.Fatalf("list recurring returned error: %v", err)
+	}
+
+	items := parseDataArray(t, listResp)
+	if len(items) != 1 {
+		t.Fatalf("expected 1 rule, got %d", len(items))
+	}
+
+	var rule recurring.Rule
+	if err := json.Unmarshal(items[0], &rule); err != nil {
+		t.Fatalf("failed to unmarshal rule: %v", err)
+	}
+	if rule.Amount != 50.00 {
+		t.Errorf("expected amount 50.00, got %f", rule.Amount)
+	}
+	if rule.Frequency != "monthly" {
+		t.Errorf("expected frequency 'monthly', got '%s'", rule.Frequency)
+	}
+	if rule.DayOfMonth == nil || *rule.DayOfMonth != 15 {
+		t.Errorf("expected day_of_month 15, got %v", rule.DayOfMonth)
+	}
+	if !rule.IsActive {
+		t.Error("expected rule to be active")
+	}
+}
+
+func TestCreateRecurringRule_MissingFields(t *testing.T) {
+	p := newTestPlugin(t)
+
+	tests := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "missing amount",
+			body: `{"type":"expense","category":"test","frequency":"monthly","day_of_month":1,"start_date":"2026-01-01"}`,
+		},
+		{
+			name: "missing type",
+			body: `{"amount":100,"category":"test","frequency":"monthly","day_of_month":1,"start_date":"2026-01-01"}`,
+		},
+		{
+			name: "missing frequency",
+			body: `{"amount":100,"type":"expense","category":"test","day_of_month":1,"start_date":"2026-01-01"}`,
+		},
+		{
+			name: "missing start_date",
+			body: `{"amount":100,"type":"expense","category":"test","frequency":"monthly","day_of_month":1}`,
+		},
+		{
+			name: "missing day_of_month for monthly",
+			body: `{"amount":100,"type":"expense","category":"test","frequency":"monthly","start_date":"2026-01-01"}`,
+		},
+		{
+			name: "missing day_of_week for weekly",
+			body: `{"amount":100,"type":"expense","category":"test","frequency":"weekly","start_date":"2026-01-01"}`,
+		},
+		{
+			name: "missing category for expense",
+			body: `{"amount":100,"type":"expense","frequency":"monthly","day_of_month":1,"start_date":"2026-01-01"}`,
+		},
+		{
+			name: "invalid frequency",
+			body: `{"amount":100,"type":"expense","category":"test","frequency":"daily","day_of_month":1,"start_date":"2026-01-01"}`,
+		},
+		{
+			name: "invalid date format",
+			body: `{"amount":100,"type":"expense","category":"test","frequency":"monthly","day_of_month":1,"start_date":"01-01-2026"}`,
+		},
+		{
+			name: "day_of_month out of range",
+			body: `{"amount":100,"type":"expense","category":"test","frequency":"monthly","day_of_month":32,"start_date":"2026-01-01"}`,
+		},
+		{
+			name: "day_of_week out of range",
+			body: `{"amount":100,"type":"expense","category":"test","frequency":"weekly","day_of_week":7,"start_date":"2026-01-01"}`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			resp, err := p.HandleAPI(&sdk.APIRequest{
+				Method: "POST",
+				Path:   "/recurring",
+				Body:   []byte(tc.body),
+			})
+			if err != nil {
+				t.Fatalf("HandleAPI returned error: %v", err)
+			}
+			if resp.StatusCode != 400 {
+				t.Fatalf("expected 400, got %d. Body: %s", resp.StatusCode, string(resp.Body))
+			}
+
+			code, _ := parseErrorResponse(t, resp)
+			if code != "VALIDATION_ERROR" {
+				t.Errorf("expected VALIDATION_ERROR, got '%s'", code)
+			}
+		})
+	}
+}
+
+func TestGenerateRecurring_Monthly(t *testing.T) {
+	p := newTestPlugin(t)
+
+	// Create a monthly rule starting 3 months ago on day 15.
+	threeMonthsAgo := time.Now().AddDate(0, -3, 0)
+	startDate := fmt.Sprintf("%d-%02d-15", threeMonthsAgo.Year(), threeMonthsAgo.Month())
+
+	body := fmt.Sprintf(`{
+		"amount": 9.99,
+		"type": "expense",
+		"category": "subscriptions",
+		"description": "Streaming service",
+		"frequency": "monthly",
+		"day_of_month": 15,
+		"start_date": "%s"
+	}`, startDate)
+
+	createRecurringRule(t, p, body)
+
+	// Generate should create transactions for 3 months ago, 2 months ago, 1 month ago, and possibly this month.
+	generated := generateRecurring(t, p)
+
+	// Calculate expected count: from start_date to today, day 15 each month.
+	today := time.Now()
+	expected := 0
+	current := time.Date(threeMonthsAgo.Year(), threeMonthsAgo.Month(), 15, 0, 0, 0, 0, time.UTC)
+	todayDate := time.Date(today.Year(), today.Month(), today.Day(), 0, 0, 0, 0, time.UTC)
+	for !current.After(todayDate) {
+		expected++
+		current = current.AddDate(0, 1, 0)
+		// Clamp to month boundaries.
+		current = clampDay(current.Year(), current.Month(), 15)
+	}
+
+	if generated != expected {
+		t.Errorf("expected %d generated transactions, got %d", expected, generated)
+	}
+
+	// Verify transactions exist by listing them for the start month.
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "GET",
+		Path:   "/transactions",
+		Query: map[string]string{
+			"month": fmt.Sprintf("%d-%02d", threeMonthsAgo.Year(), threeMonthsAgo.Month()),
+		},
+	})
+	if err != nil {
+		t.Fatalf("list transactions returned error: %v", err)
+	}
+
+	items := parseDataArray(t, resp)
+	if len(items) < 1 {
+		t.Fatal("expected at least 1 transaction in the start month")
+	}
+
+	var tx transactions.Transaction
+	if err := json.Unmarshal(items[0], &tx); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+	if !tx.IsRecurringInstance {
+		t.Error("expected is_recurring_instance=true")
+	}
+	if tx.Amount != 9.99 {
+		t.Errorf("expected amount 9.99, got %f", tx.Amount)
+	}
+}
+
+// clampDay is a test helper that clamps a day to the last day of the month.
+func clampDay(year int, month time.Month, day int) time.Time {
+	lastDay := time.Date(year, month+1, 0, 0, 0, 0, 0, time.UTC).Day()
+	if day > lastDay {
+		day = lastDay
+	}
+	return time.Date(year, month, day, 0, 0, 0, 0, time.UTC)
+}
+
+func TestGenerateRecurring_NoDuplicates(t *testing.T) {
+	p := newTestPlugin(t)
+
+	// Create a monthly rule starting 2 months ago.
+	twoMonthsAgo := time.Now().AddDate(0, -2, 0)
+	startDate := fmt.Sprintf("%d-%02d-10", twoMonthsAgo.Year(), twoMonthsAgo.Month())
+
+	body := fmt.Sprintf(`{
+		"amount": 25.00,
+		"type": "expense",
+		"category": "utilities",
+		"description": "Phone bill",
+		"frequency": "monthly",
+		"day_of_month": 10,
+		"start_date": "%s"
+	}`, startDate)
+
+	createRecurringRule(t, p, body)
+
+	// Generate once.
+	firstCount := generateRecurring(t, p)
+	if firstCount == 0 {
+		t.Fatal("expected at least 1 generated transaction on first run")
+	}
+
+	// Generate again -- should not create duplicates.
+	secondCount := generateRecurring(t, p)
+	if secondCount != 0 {
+		t.Errorf("expected 0 new transactions on second run, got %d", secondCount)
+	}
+}
+
+func TestGenerateRecurring_RespectsEndDate(t *testing.T) {
+	p := newTestPlugin(t)
+
+	// Create a monthly rule that started 4 months ago but ended 2 months ago.
+	fourMonthsAgo := time.Now().AddDate(0, -4, 0)
+	twoMonthsAgo := time.Now().AddDate(0, -2, 0)
+	startDate := fmt.Sprintf("%d-%02d-01", fourMonthsAgo.Year(), fourMonthsAgo.Month())
+	endDate := fmt.Sprintf("%d-%02d-28", twoMonthsAgo.Year(), twoMonthsAgo.Month())
+
+	body := fmt.Sprintf(`{
+		"amount": 100.00,
+		"type": "expense",
+		"category": "rent",
+		"description": "Parking spot",
+		"frequency": "monthly",
+		"day_of_month": 1,
+		"start_date": "%s",
+		"end_date": "%s"
+	}`, startDate, endDate)
+
+	ruleID := createRecurringRule(t, p, body)
+	generateRecurring(t, p)
+
+	// Verify the rule is now inactive.
+	ruleResp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "GET",
+		Path:   "/recurring",
+	})
+	if err != nil {
+		t.Fatalf("list recurring returned error: %v", err)
+	}
+
+	items := parseDataArray(t, ruleResp)
+	found := false
+	for _, item := range items {
+		var rule recurring.Rule
+		if err := json.Unmarshal(item, &rule); err != nil {
+			t.Fatalf("failed to unmarshal rule: %v", err)
+		}
+		if rule.ID == ruleID {
+			found = true
+			if rule.IsActive {
+				t.Error("expected rule to be inactive after end_date passed")
+			}
+			break
+		}
+	}
+	if !found {
+		t.Fatal("created rule not found in list")
+	}
+
+	// Verify that generated transactions only go up to end_date.
+	// Transactions should NOT have dates after end_date.
+	endDateParsed, _ := time.Parse("2006-01-02", endDate)
+	txResp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "GET",
+		Path:   "/transactions",
+		Query:  map[string]string{"type": "expense"},
+	})
+	if err != nil {
+		t.Fatalf("list transactions returned error: %v", err)
+	}
+
+	txItems := parseDataArray(t, txResp)
+	for _, item := range txItems {
+		var tx transactions.Transaction
+		if err := json.Unmarshal(item, &tx); err != nil {
+			t.Fatalf("failed to unmarshal: %v", err)
+		}
+		if tx.RecurringRuleID != nil && *tx.RecurringRuleID == ruleID {
+			txDate, _ := time.Parse("2006-01-02", tx.Date)
+			if txDate.After(endDateParsed) {
+				t.Errorf("generated transaction date %s is after end_date %s", tx.Date, endDate)
+			}
+		}
+	}
+}
+
+func TestGenerateRecurring_Weekly(t *testing.T) {
+	p := newTestPlugin(t)
+
+	// Create a weekly rule starting 4 weeks ago, on Monday (day_of_week=1).
+	fourWeeksAgo := time.Now().AddDate(0, 0, -28)
+	startDate := fourWeeksAgo.Format("2006-01-02")
+
+	body := fmt.Sprintf(`{
+		"amount": 30.00,
+		"type": "expense",
+		"category": "groceries",
+		"description": "Weekly groceries",
+		"frequency": "weekly",
+		"day_of_week": 1,
+		"start_date": "%s"
+	}`, startDate)
+
+	createRecurringRule(t, p, body)
+
+	generated := generateRecurring(t, p)
+
+	// Calculate expected: from startDate to today, every Monday.
+	today := time.Now()
+	todayDate := time.Date(today.Year(), today.Month(), today.Day(), 0, 0, 0, 0, time.UTC)
+	start := time.Date(fourWeeksAgo.Year(), fourWeeksAgo.Month(), fourWeeksAgo.Day(), 0, 0, 0, 0, time.UTC)
+
+	// Find first Monday on or after startDate.
+	current := start
+	for current.Weekday() != time.Monday {
+		current = current.AddDate(0, 0, 1)
+	}
+
+	expected := 0
+	for !current.After(todayDate) {
+		expected++
+		current = current.AddDate(0, 0, 7)
+	}
+
+	if generated != expected {
+		t.Errorf("expected %d weekly transactions, got %d", expected, generated)
+	}
+}
+
+func TestUpdateRecurringRule(t *testing.T) {
+	p := newTestPlugin(t)
+
+	body := `{
+		"amount": 50.00,
+		"type": "expense",
+		"category": "subscriptions",
+		"description": "Netflix",
+		"frequency": "monthly",
+		"day_of_month": 15,
+		"start_date": "2026-01-15"
+	}`
+
+	ruleID := createRecurringRule(t, p, body)
+
+	// Update amount and frequency to weekly.
+	updateBody := `{
+		"amount": 75.00,
+		"type": "expense",
+		"category": "subscriptions",
+		"description": "Netflix Premium",
+		"frequency": "weekly",
+		"day_of_week": 3,
+		"start_date": "2026-01-15"
+	}`
+
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "PUT",
+		Path:   fmt.Sprintf("/recurring/%d", ruleID),
+		Body:   []byte(updateBody),
+	})
+	if err != nil {
+		t.Fatalf("update returned error: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d. Body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	data := parseDataObject(t, resp)
+	var rule recurring.Rule
+	if err := json.Unmarshal(data, &rule); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+
+	if rule.Amount != 75.00 {
+		t.Errorf("expected amount 75.00, got %f", rule.Amount)
+	}
+	if rule.Frequency != "weekly" {
+		t.Errorf("expected frequency 'weekly', got '%s'", rule.Frequency)
+	}
+	if rule.Description != "Netflix Premium" {
+		t.Errorf("expected description 'Netflix Premium', got '%s'", rule.Description)
+	}
+}
+
+func TestDeleteRecurringRule(t *testing.T) {
+	p := newTestPlugin(t)
+
+	// Create a rule and generate some transactions.
+	twoMonthsAgo := time.Now().AddDate(0, -2, 0)
+	startDate := fmt.Sprintf("%d-%02d-01", twoMonthsAgo.Year(), twoMonthsAgo.Month())
+
+	body := fmt.Sprintf(`{
+		"amount": 100.00,
+		"type": "expense",
+		"category": "rent",
+		"description": "Storage unit",
+		"frequency": "monthly",
+		"day_of_month": 1,
+		"start_date": "%s"
+	}`, startDate)
+
+	ruleID := createRecurringRule(t, p, body)
+	generateRecurring(t, p)
+
+	// Count generated transactions before delete.
+	txResp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "GET",
+		Path:   "/transactions",
+		Query:  map[string]string{"type": "expense"},
+	})
+	if err != nil {
+		t.Fatalf("list transactions failed: %v", err)
+	}
+	txCountBefore := len(parseDataArray(t, txResp))
+	if txCountBefore == 0 {
+		t.Fatal("expected generated transactions before delete")
+	}
+
+	// Delete (deactivate) the rule.
+	delResp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "DELETE",
+		Path:   fmt.Sprintf("/recurring/%d", ruleID),
+	})
+	if err != nil {
+		t.Fatalf("delete returned error: %v", err)
+	}
+	if delResp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d. Body: %s", delResp.StatusCode, string(delResp.Body))
+	}
+
+	// Verify the rule is now inactive.
+	listResp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "GET",
+		Path:   "/recurring",
+	})
+	if err != nil {
+		t.Fatalf("list recurring returned error: %v", err)
+	}
+
+	items := parseDataArray(t, listResp)
+	for _, item := range items {
+		var rule recurring.Rule
+		if err := json.Unmarshal(item, &rule); err != nil {
+			t.Fatalf("failed to unmarshal: %v", err)
+		}
+		if rule.ID == ruleID && rule.IsActive {
+			t.Error("expected rule to be inactive after delete")
+		}
+	}
+
+	// Verify generated transactions still exist (soft delete does not remove them).
+	txRespAfter, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "GET",
+		Path:   "/transactions",
+		Query:  map[string]string{"type": "expense"},
+	})
+	if err != nil {
+		t.Fatalf("list transactions failed: %v", err)
+	}
+	txCountAfter := len(parseDataArray(t, txRespAfter))
+	if txCountAfter != txCountBefore {
+		t.Errorf("expected %d transactions after deactivation, got %d", txCountBefore, txCountAfter)
 	}
 }
