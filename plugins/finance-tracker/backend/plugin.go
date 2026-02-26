@@ -11,6 +11,7 @@ import (
 	_ "modernc.org/sqlite"
 
 	"github.com/alvarotorresc/cortex/pkg/sdk"
+	"github.com/alvarotorresc/cortex/plugins/finance-tracker/backend/accounts"
 	"github.com/alvarotorresc/cortex/plugins/finance-tracker/backend/shared"
 )
 
@@ -19,7 +20,8 @@ var migrations embed.FS
 
 // FinancePlugin implements sdk.CortexPlugin for personal finance tracking.
 type FinancePlugin struct {
-	db *sql.DB
+	db              *sql.DB
+	accountsHandler *accounts.Handler
 }
 
 // GetManifest returns the plugin's metadata.
@@ -91,6 +93,8 @@ func (p *FinancePlugin) Migrate(databasePath string) error {
 		}
 	}
 
+	p.accountsHandler = accounts.NewHandler(p.db)
+
 	return nil
 }
 
@@ -107,6 +111,8 @@ func (p *FinancePlugin) HandleAPI(req *sdk.APIRequest) (*sdk.APIResponse, error)
 		return p.listCategories()
 	case req.Method == "GET" && req.Path == "/summary":
 		return p.getSummary(req)
+	case strings.HasPrefix(req.Path, "/accounts"):
+		return p.accountsHandler.Handle(req)
 	default:
 		return jsonError(404, "NOT_FOUND", "route not found")
 	}

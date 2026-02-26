@@ -55,6 +55,19 @@ func parseErrorResponse(t *testing.T, resp *sdk.APIResponse) (code string, messa
 	return body.Error.Code, body.Error.Message
 }
 
+// parseDataObject parses an APIResponse body and returns the "data" field as raw JSON.
+func parseDataObject(t *testing.T, resp *sdk.APIResponse) json.RawMessage {
+	t.Helper()
+
+	var body struct {
+		Data json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(resp.Body, &body); err != nil {
+		t.Fatalf("failed to parse response body: %v", err)
+	}
+	return body.Data
+}
+
 // --- Tests ---
 
 func TestMigrate_CreatesTables(t *testing.T) {
@@ -527,5 +540,525 @@ func TestMigrate_V2Indexes(t *testing.T) {
 		if err != nil {
 			t.Errorf("index %s does not exist after migration: %v", idx, err)
 		}
+	}
+}
+
+// --- Accounts tests ---
+
+func TestCreateAccount_Valid(t *testing.T) {
+	p := newTestPlugin(t)
+
+	body := `{"name":"Savings EUR","type":"savings","currency":"EUR"}`
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "POST",
+		Path:   "/accounts",
+		Body:   []byte(body),
+	})
+	if err != nil {
+		t.Fatalf("HandleAPI returned error: %v", err)
+	}
+	if resp.StatusCode != 201 {
+		t.Fatalf("expected 201, got %d. Body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	// Verify it appears in the list.
+	listResp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "GET",
+		Path:   "/accounts",
+	})
+	if err != nil {
+		t.Fatalf("list returned error: %v", err)
+	}
+
+	items := parseDataArray(t, listResp)
+	// Default "Main Account" + the new one = 2.
+	if len(items) != 2 {
+		t.Fatalf("expected 2 accounts, got %d", len(items))
+	}
+
+	// Find the new account.
+	var found bool
+	for _, raw := range items {
+		var a struct {
+			Name string `json:"name"`
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(raw, &a); err != nil {
+			t.Fatalf("failed to unmarshal account: %v", err)
+		}
+		if a.Name == "Savings EUR" && a.Type == "savings" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("created account 'Savings EUR' not found in list")
+	}
+}
+
+func TestCreateAccount_MissingName(t *testing.T) {
+	p := newTestPlugin(t)
+
+	body := `{"type":"checking","currency":"EUR"}`
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "POST",
+		Path:   "/accounts",
+		Body:   []byte(body),
+	})
+	if err != nil {
+		t.Fatalf("HandleAPI returned error: %v", err)
+	}
+	if resp.StatusCode != 400 {
+		t.Fatalf("expected 400, got %d", resp.StatusCode)
+	}
+
+	code, _ := parseErrorResponse(t, resp)
+	if code != "VALIDATION_ERROR" {
+		t.Errorf("expected VALIDATION_ERROR, got '%s'", code)
+	}
+}
+
+func TestCreateAccount_InvalidType(t *testing.T) {
+	p := newTestPlugin(t)
+
+	body := `{"name":"Credit Card","type":"credit","currency":"EUR"}`
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "POST",
+		Path:   "/accounts",
+		Body:   []byte(body),
+	})
+	if err != nil {
+		t.Fatalf("HandleAPI returned error: %v", err)
+	}
+	if resp.StatusCode != 400 {
+		t.Fatalf("expected 400, got %d", resp.StatusCode)
+	}
+
+	code, _ := parseErrorResponse(t, resp)
+	if code != "VALIDATION_ERROR" {
+		t.Errorf("expected VALIDATION_ERROR, got '%s'", code)
+	}
+}
+
+func TestCreateAccount_DefaultCurrency(t *testing.T) {
+	p := newTestPlugin(t)
+
+	// Currency omitted, should default to EUR.
+	body := `{"name":"Cash Wallet","type":"cash"}`
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "POST",
+		Path:   "/accounts",
+		Body:   []byte(body),
+	})
+	if err != nil {
+		t.Fatalf("HandleAPI returned error: %v", err)
+	}
+	if resp.StatusCode != 201 {
+		t.Fatalf("expected 201, got %d. Body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	// Verify the currency was set to EUR.
+	listResp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "GET",
+		Path:   "/accounts",
+	})
+	if err != nil {
+		t.Fatalf("list returned error: %v", err)
+	}
+
+	items := parseDataArray(t, listResp)
+	var found bool
+	for _, raw := range items {
+		var a struct {
+			Name     string `json:"name"`
+			Currency string `json:"currency"`
+		}
+		if err := json.Unmarshal(raw, &a); err != nil {
+			t.Fatalf("failed to unmarshal: %v", err)
+		}
+		if a.Name == "Cash Wallet" {
+			found = true
+			if a.Currency != "EUR" {
+				t.Errorf("expected currency EUR, got '%s'", a.Currency)
+			}
+		}
+	}
+	if !found {
+		t.Error("account 'Cash Wallet' not found in list")
+	}
+}
+
+func TestCreateAccount_WithInitialBalance(t *testing.T) {
+	p := newTestPlugin(t)
+
+	body := `{"name":"Starter","type":"checking","currency":"EUR","initial_balance":500.0}`
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "POST",
+		Path:   "/accounts",
+		Body:   []byte(body),
+	})
+	if err != nil {
+		t.Fatalf("HandleAPI returned error: %v", err)
+	}
+	if resp.StatusCode != 201 {
+		t.Fatalf("expected 201, got %d", resp.StatusCode)
+	}
+
+	// Parse created ID.
+	data := parseDataObject(t, resp)
+	var created struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.Unmarshal(data, &created); err != nil {
+		t.Fatalf("failed to parse created response: %v", err)
+	}
+
+	// Verify balance equals initial_balance when there are no transactions.
+	balanceResp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "GET",
+		Path:   fmt.Sprintf("/accounts/%d/balance", created.ID),
+	})
+	if err != nil {
+		t.Fatalf("balance returned error: %v", err)
+	}
+	if balanceResp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d", balanceResp.StatusCode)
+	}
+
+	balanceData := parseDataObject(t, balanceResp)
+	var result struct {
+		Balance float64 `json:"balance"`
+	}
+	if err := json.Unmarshal(balanceData, &result); err != nil {
+		t.Fatalf("failed to parse balance: %v", err)
+	}
+	if result.Balance != 500.0 {
+		t.Errorf("expected balance 500.0, got %f", result.Balance)
+	}
+}
+
+func TestUpdateAccount(t *testing.T) {
+	p := newTestPlugin(t)
+
+	// Update the default account (id=1).
+	body := `{"name":"Updated Main","type":"checking","currency":"USD"}`
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "PUT",
+		Path:   "/accounts/1",
+		Body:   []byte(body),
+	})
+	if err != nil {
+		t.Fatalf("HandleAPI returned error: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d. Body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	// Verify the update in the list.
+	listResp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "GET",
+		Path:   "/accounts",
+	})
+	if err != nil {
+		t.Fatalf("list returned error: %v", err)
+	}
+
+	items := parseDataArray(t, listResp)
+	if len(items) != 1 {
+		t.Fatalf("expected 1 account, got %d", len(items))
+	}
+
+	var a struct {
+		Name     string `json:"name"`
+		Currency string `json:"currency"`
+	}
+	if err := json.Unmarshal(items[0], &a); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+	if a.Name != "Updated Main" {
+		t.Errorf("expected name 'Updated Main', got '%s'", a.Name)
+	}
+	if a.Currency != "USD" {
+		t.Errorf("expected currency 'USD', got '%s'", a.Currency)
+	}
+}
+
+func TestUpdateAccount_NotFound(t *testing.T) {
+	p := newTestPlugin(t)
+
+	body := `{"name":"Ghost","type":"checking","currency":"EUR"}`
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "PUT",
+		Path:   "/accounts/999",
+		Body:   []byte(body),
+	})
+	if err != nil {
+		t.Fatalf("HandleAPI returned error: %v", err)
+	}
+	if resp.StatusCode != 404 {
+		t.Fatalf("expected 404, got %d", resp.StatusCode)
+	}
+
+	code, _ := parseErrorResponse(t, resp)
+	if code != "NOT_FOUND" {
+		t.Errorf("expected NOT_FOUND, got '%s'", code)
+	}
+}
+
+func TestArchiveAccount(t *testing.T) {
+	p := newTestPlugin(t)
+
+	// Create an account to archive.
+	createBody := `{"name":"To Archive","type":"cash","currency":"EUR"}`
+	createResp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "POST",
+		Path:   "/accounts",
+		Body:   []byte(createBody),
+	})
+	if err != nil {
+		t.Fatalf("create returned error: %v", err)
+	}
+
+	data := parseDataObject(t, createResp)
+	var created struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.Unmarshal(data, &created); err != nil {
+		t.Fatalf("failed to parse: %v", err)
+	}
+
+	// Archive it.
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "DELETE",
+		Path:   fmt.Sprintf("/accounts/%d", created.ID),
+	})
+	if err != nil {
+		t.Fatalf("archive returned error: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d. Body: %s", resp.StatusCode, string(resp.Body))
+	}
+}
+
+func TestListAccounts_ExcludesArchived(t *testing.T) {
+	p := newTestPlugin(t)
+
+	// Create an account.
+	createBody := `{"name":"Temporary","type":"cash","currency":"EUR"}`
+	createResp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "POST",
+		Path:   "/accounts",
+		Body:   []byte(createBody),
+	})
+	if err != nil {
+		t.Fatalf("create returned error: %v", err)
+	}
+
+	data := parseDataObject(t, createResp)
+	var created struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.Unmarshal(data, &created); err != nil {
+		t.Fatalf("failed to parse: %v", err)
+	}
+
+	// Archive it.
+	_, err = p.HandleAPI(&sdk.APIRequest{
+		Method: "DELETE",
+		Path:   fmt.Sprintf("/accounts/%d", created.ID),
+	})
+	if err != nil {
+		t.Fatalf("archive returned error: %v", err)
+	}
+
+	// List: should only show the default "Main Account".
+	listResp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "GET",
+		Path:   "/accounts",
+	})
+	if err != nil {
+		t.Fatalf("list returned error: %v", err)
+	}
+
+	items := parseDataArray(t, listResp)
+	if len(items) != 1 {
+		t.Fatalf("expected 1 active account, got %d", len(items))
+	}
+
+	var a struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(items[0], &a); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+	if a.Name != "Main Account" {
+		t.Errorf("expected 'Main Account', got '%s'", a.Name)
+	}
+}
+
+func TestListAccounts_IncludesBalance(t *testing.T) {
+	p := newTestPlugin(t)
+
+	// Add income and expense transactions to the default account (id=1).
+	income := `{"amount":3000,"type":"income","category":"salary","date":"2026-02-01"}`
+	expense := `{"amount":800,"type":"expense","category":"groceries","date":"2026-02-05"}`
+
+	for _, body := range []string{income, expense} {
+		resp, err := p.HandleAPI(&sdk.APIRequest{
+			Method: "POST",
+			Path:   "/transactions",
+			Body:   []byte(body),
+		})
+		if err != nil || resp.StatusCode != 201 {
+			t.Fatalf("failed to create transaction: err=%v status=%d", err, resp.StatusCode)
+		}
+	}
+
+	// List accounts with balance.
+	listResp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "GET",
+		Path:   "/accounts",
+	})
+	if err != nil {
+		t.Fatalf("list returned error: %v", err)
+	}
+
+	items := parseDataArray(t, listResp)
+	if len(items) != 1 {
+		t.Fatalf("expected 1 account, got %d", len(items))
+	}
+
+	var a struct {
+		Name    string  `json:"name"`
+		Balance float64 `json:"balance"`
+	}
+	if err := json.Unmarshal(items[0], &a); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+
+	expectedBalance := 3000.0 - 800.0
+	if a.Balance != expectedBalance {
+		t.Errorf("expected balance %f, got %f", expectedBalance, a.Balance)
+	}
+}
+
+func TestAccountBalance_CalculatedFromTransactions(t *testing.T) {
+	p := newTestPlugin(t)
+
+	// Create transactions: 5000 income, 1200 expense, 300 expense.
+	transactions := []string{
+		`{"amount":5000,"type":"income","category":"salary","date":"2026-02-01"}`,
+		`{"amount":1200,"type":"expense","category":"bills","date":"2026-02-03"}`,
+		`{"amount":300,"type":"expense","category":"groceries","date":"2026-02-05"}`,
+	}
+	for _, body := range transactions {
+		resp, err := p.HandleAPI(&sdk.APIRequest{
+			Method: "POST",
+			Path:   "/transactions",
+			Body:   []byte(body),
+		})
+		if err != nil || resp.StatusCode != 201 {
+			t.Fatalf("failed to create transaction: err=%v status=%d", err, resp.StatusCode)
+		}
+	}
+
+	// GET /accounts/1/balance
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "GET",
+		Path:   "/accounts/1/balance",
+	})
+	if err != nil {
+		t.Fatalf("balance returned error: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d. Body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	data := parseDataObject(t, resp)
+	var result struct {
+		Balance float64 `json:"balance"`
+	}
+	if err := json.Unmarshal(data, &result); err != nil {
+		t.Fatalf("failed to parse balance: %v", err)
+	}
+
+	expectedBalance := 5000.0 - 1200.0 - 300.0
+	if result.Balance != expectedBalance {
+		t.Errorf("expected balance %f, got %f", expectedBalance, result.Balance)
+	}
+}
+
+func TestAccountBalance_NotFound(t *testing.T) {
+	p := newTestPlugin(t)
+
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "GET",
+		Path:   "/accounts/999/balance",
+	})
+	if err != nil {
+		t.Fatalf("HandleAPI returned error: %v", err)
+	}
+	if resp.StatusCode != 404 {
+		t.Fatalf("expected 404, got %d", resp.StatusCode)
+	}
+
+	code, _ := parseErrorResponse(t, resp)
+	if code != "NOT_FOUND" {
+		t.Errorf("expected NOT_FOUND, got '%s'", code)
+	}
+}
+
+func TestAccountBalance_IncludesInitialBalance(t *testing.T) {
+	p := newTestPlugin(t)
+
+	// Create account with initial_balance of 1000.
+	createBody := `{"name":"Pre-funded","type":"checking","currency":"EUR","initial_balance":1000}`
+	createResp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "POST",
+		Path:   "/accounts",
+		Body:   []byte(createBody),
+	})
+	if err != nil {
+		t.Fatalf("create returned error: %v", err)
+	}
+
+	data := parseDataObject(t, createResp)
+	var created struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.Unmarshal(data, &created); err != nil {
+		t.Fatalf("failed to parse: %v", err)
+	}
+
+	// Add a transaction to this account directly in the DB.
+	_, err = p.db.Exec(
+		"INSERT INTO transactions (amount, type, category, date, account_id) VALUES (?, ?, ?, ?, ?)",
+		200.0, "expense", "groceries", "2026-02-10", created.ID,
+	)
+	if err != nil {
+		t.Fatalf("failed to insert transaction: %v", err)
+	}
+
+	// GET balance: should be 1000 (initial) - 200 (expense) = 800.
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "GET",
+		Path:   fmt.Sprintf("/accounts/%d/balance", created.ID),
+	})
+	if err != nil {
+		t.Fatalf("balance returned error: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	balanceData := parseDataObject(t, resp)
+	var result struct {
+		Balance float64 `json:"balance"`
+	}
+	if err := json.Unmarshal(balanceData, &result); err != nil {
+		t.Fatalf("failed to parse: %v", err)
+	}
+
+	if result.Balance != 800.0 {
+		t.Errorf("expected balance 800.0, got %f", result.Balance)
 	}
 }
