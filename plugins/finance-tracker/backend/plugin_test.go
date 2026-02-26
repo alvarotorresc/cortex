@@ -687,10 +687,10 @@ func TestCreateAccount_DefaultCurrency(t *testing.T) {
 	}
 }
 
-func TestCreateAccount_WithInitialBalance(t *testing.T) {
+func TestCreateAccount_SavingsWithInterestRate(t *testing.T) {
 	p := newTestPlugin(t)
 
-	body := `{"name":"Starter","type":"checking","currency":"EUR","initial_balance":500.0}`
+	body := `{"name":"High Yield Savings","type":"savings","currency":"EUR","interest_rate":2.5}`
 	resp, err := p.HandleAPI(&sdk.APIRequest{
 		Method: "POST",
 		Path:   "/accounts",
@@ -700,7 +700,7 @@ func TestCreateAccount_WithInitialBalance(t *testing.T) {
 		t.Fatalf("HandleAPI returned error: %v", err)
 	}
 	if resp.StatusCode != 201 {
-		t.Fatalf("expected 201, got %d", resp.StatusCode)
+		t.Fatalf("expected 201, got %d. Body: %s", resp.StatusCode, string(resp.Body))
 	}
 
 	// Parse created ID.
@@ -712,7 +712,7 @@ func TestCreateAccount_WithInitialBalance(t *testing.T) {
 		t.Fatalf("failed to parse created response: %v", err)
 	}
 
-	// Verify balance equals initial_balance when there are no transactions.
+	// Verify interest_rate is stored by fetching balance endpoint.
 	balanceResp, err := p.HandleAPI(&sdk.APIRequest{
 		Method: "GET",
 		Path:   fmt.Sprintf("/accounts/%d/balance", created.ID),
@@ -726,13 +726,39 @@ func TestCreateAccount_WithInitialBalance(t *testing.T) {
 
 	balanceData := parseDataObject(t, balanceResp)
 	var result struct {
-		Balance float64 `json:"balance"`
+		InterestRate *float64 `json:"interest_rate"`
 	}
 	if err := json.Unmarshal(balanceData, &result); err != nil {
-		t.Fatalf("failed to parse balance: %v", err)
+		t.Fatalf("failed to parse balance response: %v", err)
 	}
-	if result.Balance != 500.0 {
-		t.Errorf("expected balance 500.0, got %f", result.Balance)
+	if result.InterestRate == nil {
+		t.Fatal("expected interest_rate to be set, got nil")
+	}
+	if *result.InterestRate != 2.5 {
+		t.Errorf("expected interest_rate 2.5, got %f", *result.InterestRate)
+	}
+}
+
+func TestCreateAccount_InterestRateOnlyForSavings(t *testing.T) {
+	p := newTestPlugin(t)
+
+	// Attempting to set interest_rate on a checking account should fail.
+	body := `{"name":"Bad Account","type":"checking","currency":"EUR","interest_rate":1.5}`
+	resp, err := p.HandleAPI(&sdk.APIRequest{
+		Method: "POST",
+		Path:   "/accounts",
+		Body:   []byte(body),
+	})
+	if err != nil {
+		t.Fatalf("HandleAPI returned error: %v", err)
+	}
+	if resp.StatusCode != 400 {
+		t.Fatalf("expected 400, got %d. Body: %s", resp.StatusCode, string(resp.Body))
+	}
+
+	code, _ := parseErrorResponse(t, resp)
+	if code != "VALIDATION_ERROR" {
+		t.Errorf("expected VALIDATION_ERROR, got '%s'", code)
 	}
 }
 
@@ -1007,11 +1033,11 @@ func TestAccountBalance_NotFound(t *testing.T) {
 	}
 }
 
-func TestAccountBalance_IncludesInitialBalance(t *testing.T) {
+func TestAccountBalance_InterestEstimation(t *testing.T) {
 	p := newTestPlugin(t)
 
-	// Create account with initial_balance of 1000.
-	createBody := `{"name":"Pre-funded","type":"checking","currency":"EUR","initial_balance":1000}`
+	// Create a savings account with 2.5% interest rate.
+	createBody := `{"name":"Savings","type":"savings","currency":"EUR","interest_rate":2.5}`
 	createResp, err := p.HandleAPI(&sdk.APIRequest{
 		Method: "POST",
 		Path:   "/accounts",
@@ -1029,16 +1055,16 @@ func TestAccountBalance_IncludesInitialBalance(t *testing.T) {
 		t.Fatalf("failed to parse: %v", err)
 	}
 
-	// Add a transaction to this account directly in the DB.
+	// Add income of 10000 to this account directly in the DB.
 	_, err = p.db.Exec(
 		"INSERT INTO transactions (amount, type, category, date, account_id) VALUES (?, ?, ?, ?, ?)",
-		200.0, "expense", "groceries", "2026-02-10", created.ID,
+		10000.0, "income", "salary", "2026-02-01", created.ID,
 	)
 	if err != nil {
 		t.Fatalf("failed to insert transaction: %v", err)
 	}
 
-	// GET balance: should be 1000 (initial) - 200 (expense) = 800.
+	// GET balance: should include estimated_interest = 10000 * (2.5 / 100) = 250.
 	resp, err := p.HandleAPI(&sdk.APIRequest{
 		Method: "GET",
 		Path:   fmt.Sprintf("/accounts/%d/balance", created.ID),
@@ -1047,18 +1073,25 @@ func TestAccountBalance_IncludesInitialBalance(t *testing.T) {
 		t.Fatalf("balance returned error: %v", err)
 	}
 	if resp.StatusCode != 200 {
-		t.Fatalf("expected 200, got %d", resp.StatusCode)
+		t.Fatalf("expected 200, got %d. Body: %s", resp.StatusCode, string(resp.Body))
 	}
 
 	balanceData := parseDataObject(t, resp)
 	var result struct {
-		Balance float64 `json:"balance"`
+		Balance           float64  `json:"balance"`
+		EstimatedInterest *float64 `json:"estimated_interest"`
 	}
 	if err := json.Unmarshal(balanceData, &result); err != nil {
 		t.Fatalf("failed to parse: %v", err)
 	}
 
-	if result.Balance != 800.0 {
-		t.Errorf("expected balance 800.0, got %f", result.Balance)
+	if result.Balance != 10000.0 {
+		t.Errorf("expected balance 10000.0, got %f", result.Balance)
+	}
+	if result.EstimatedInterest == nil {
+		t.Fatal("expected estimated_interest to be set, got nil")
+	}
+	if *result.EstimatedInterest != 250.0 {
+		t.Errorf("expected estimated_interest 250.0, got %f", *result.EstimatedInterest)
 	}
 }

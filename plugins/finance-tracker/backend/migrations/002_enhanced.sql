@@ -8,14 +8,16 @@ CREATE TABLE IF NOT EXISTS accounts (
     name TEXT NOT NULL,
     type TEXT NOT NULL CHECK(type IN ('checking', 'savings', 'cash', 'investment')),
     currency TEXT NOT NULL DEFAULT 'EUR',
-    initial_balance REAL NOT NULL DEFAULT 0,
-    is_active INTEGER NOT NULL DEFAULT 1,
-    sort_order INTEGER NOT NULL DEFAULT 0,
+    interest_rate REAL,
+    icon TEXT,
+    color TEXT,
+    is_archived INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 -- Default account
-INSERT OR IGNORE INTO accounts (id, name, type, currency) VALUES (1, 'Main Account', 'checking', 'EUR');
+INSERT OR IGNORE INTO accounts (id, name, type, currency, icon, color)
+VALUES (1, 'Main Account', 'checking', 'EUR', 'wallet', '#0070F3');
 
 -- Tags table
 CREATE TABLE IF NOT EXISTS tags (
@@ -36,13 +38,17 @@ CREATE TABLE IF NOT EXISTS recurring_rules (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     amount REAL NOT NULL,
     type TEXT NOT NULL CHECK(type IN ('income', 'expense', 'transfer')),
+    account_id INTEGER NOT NULL DEFAULT 1 REFERENCES accounts(id),
+    dest_account_id INTEGER REFERENCES accounts(id),
     category TEXT NOT NULL,
     description TEXT,
-    account_id INTEGER NOT NULL DEFAULT 1 REFERENCES accounts(id),
     frequency TEXT NOT NULL CHECK(frequency IN ('weekly', 'biweekly', 'monthly', 'yearly')),
+    day_of_month INTEGER,
+    day_of_week INTEGER,
+    month_of_year INTEGER,
     start_date TEXT NOT NULL,
     end_date TEXT,
-    next_due TEXT NOT NULL,
+    last_generated TEXT,
     is_active INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -50,11 +56,11 @@ CREATE TABLE IF NOT EXISTS recurring_rules (
 -- Budgets table
 CREATE TABLE IF NOT EXISTS budgets (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    category TEXT NOT NULL,
+    name TEXT,
+    category TEXT,
     amount REAL NOT NULL,
-    month TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    UNIQUE(category, month)
+    month TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 -- Savings goals table
@@ -63,7 +69,8 @@ CREATE TABLE IF NOT EXISTS savings_goals (
     name TEXT NOT NULL,
     target_amount REAL NOT NULL,
     current_amount REAL NOT NULL DEFAULT 0,
-    deadline TEXT,
+    target_date TEXT,
+    icon TEXT,
     color TEXT,
     is_completed INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -74,14 +81,14 @@ CREATE TABLE IF NOT EXISTS investments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
     type TEXT NOT NULL CHECK(type IN ('crypto', 'etf', 'fund', 'stock', 'other')),
-    symbol TEXT,
-    units REAL NOT NULL DEFAULT 0,
-    avg_buy_price REAL NOT NULL DEFAULT 0,
-    current_price REAL NOT NULL DEFAULT 0,
+    account_id INTEGER REFERENCES accounts(id),
+    units REAL,
+    avg_buy_price REAL,
+    current_price REAL,
     currency TEXT NOT NULL DEFAULT 'EUR',
     notes TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    last_updated TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 -- ALTER transactions: add new columns

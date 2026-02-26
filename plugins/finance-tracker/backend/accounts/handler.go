@@ -57,7 +57,7 @@ func (h *Handler) create(req *sdk.APIRequest) (*sdk.APIResponse, error) {
 		input.Currency = "EUR"
 	}
 
-	id, appErr := h.service.Create(input)
+	id, appErr := h.service.Create(&input)
 	if appErr != nil {
 		return shared.JSONError(appErr)
 	}
@@ -80,7 +80,7 @@ func (h *Handler) update(req *sdk.APIRequest) (*sdk.APIResponse, error) {
 		input.Currency = "EUR"
 	}
 
-	if appErr := h.service.Update(id, input); appErr != nil {
+	if appErr := h.service.Update(id, &input); appErr != nil {
 		return shared.JSONError(appErr)
 	}
 

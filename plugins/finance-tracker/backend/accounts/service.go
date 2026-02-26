@@ -27,17 +27,19 @@ func (s *Service) ListActive() ([]AccountWithBalance, error) {
 		if err != nil {
 			return nil, err
 		}
-		result = append(result, AccountWithBalance{
+		awb := AccountWithBalance{
 			Account: account,
 			Balance: balance,
-		})
+		}
+		awb.EstimatedInterest = estimateInterest(&account, balance)
+		result = append(result, awb)
 	}
 
 	return result, nil
 }
 
 // Create validates input and creates a new account.
-func (s *Service) Create(input CreateAccountInput) (int64, *shared.AppError) {
+func (s *Service) Create(input *CreateAccountInput) (int64, *shared.AppError) {
 	if appErr := validateCreateInput(input); appErr != nil {
 		return 0, appErr
 	}
@@ -50,7 +52,7 @@ func (s *Service) Create(input CreateAccountInput) (int64, *shared.AppError) {
 }
 
 // Update validates input and modifies an existing account.
-func (s *Service) Update(id int64, input UpdateAccountInput) *shared.AppError {
+func (s *Service) Update(id int64, input *UpdateAccountInput) *shared.AppError {
 	if _, appErr := s.repo.GetByID(id); appErr != nil {
 		return appErr
 	}
@@ -68,7 +70,7 @@ func (s *Service) Update(id int64, input UpdateAccountInput) *shared.AppError {
 	return nil
 }
 
-// Archive soft-deletes an account by setting is_active to 0.
+// Archive soft-deletes an account by setting is_archived to 1.
 func (s *Service) Archive(id int64) *shared.AppError {
 	if err := s.repo.Archive(id); err != nil {
 		if appErr, ok := err.(*shared.AppError); ok {
@@ -79,7 +81,8 @@ func (s *Service) Archive(id int64) *shared.AppError {
 	return nil
 }
 
-// GetBalance returns the computed balance for a specific account.
+// GetBalance returns the computed balance for a specific account, including
+// estimated annual interest for savings accounts with interest_rate set.
 func (s *Service) GetBalance(id int64) (*AccountWithBalance, *shared.AppError) {
 	account, appErr := s.repo.GetByID(id)
 	if appErr != nil {
@@ -91,30 +94,49 @@ func (s *Service) GetBalance(id int64) (*AccountWithBalance, *shared.AppError) {
 		return nil, shared.NewAppError("INTERNAL", "failed to calculate balance", 500)
 	}
 
-	return &AccountWithBalance{
+	awb := &AccountWithBalance{
 		Account: *account,
 		Balance: balance,
-	}, nil
+	}
+	awb.EstimatedInterest = estimateInterest(account, balance)
+
+	return awb, nil
+}
+
+// estimateInterest calculates estimated annual interest for savings accounts.
+// Returns nil if the account is not savings or has no interest_rate.
+func estimateInterest(account *Account, balance float64) *float64 {
+	if account.Type != "savings" || account.InterestRate == nil {
+		return nil
+	}
+	interest := balance * (*account.InterestRate / 100)
+	return &interest
 }
 
 // validateCreateInput checks that all required fields are present and valid.
-func validateCreateInput(input CreateAccountInput) *shared.AppError {
+func validateCreateInput(input *CreateAccountInput) *shared.AppError {
 	if input.Name == "" {
 		return shared.NewValidationError("name is required")
 	}
 	if !IsValidAccountType(input.Type) {
 		return shared.NewValidationError("type must be one of: checking, savings, cash, investment")
+	}
+	if input.InterestRate != nil && input.Type != "savings" {
+		return shared.NewValidationError("interest_rate is only allowed for savings accounts")
 	}
 	return nil
 }
 
 // validateUpdateInput checks that all required fields are present and valid.
-func validateUpdateInput(input UpdateAccountInput) *shared.AppError {
+func validateUpdateInput(input *UpdateAccountInput) *shared.AppError {
 	if input.Name == "" {
 		return shared.NewValidationError("name is required")
 	}
 	if !IsValidAccountType(input.Type) {
 		return shared.NewValidationError("type must be one of: checking, savings, cash, investment")
+	}
+	if input.InterestRate != nil && input.Type != "savings" {
+		return shared.NewValidationError("interest_rate is only allowed for savings accounts")
 	}
 	return nil
 }
