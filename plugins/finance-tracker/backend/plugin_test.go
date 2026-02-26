@@ -402,3 +402,130 @@ func TestWidgetData_MonthlyBalance(t *testing.T) {
 		t.Errorf("expected month '%s', got '%s'", currentMonth, widget.Data.Month)
 	}
 }
+
+// --- Migration v2 tests ---
+
+func TestMigrate_V2TablesExist(t *testing.T) {
+	p := newTestPlugin(t)
+
+	expectedTables := []string{
+		"transactions", "categories", "accounts", "tags",
+		"transaction_tags", "recurring_rules", "budgets",
+		"savings_goals", "investments",
+	}
+	for _, table := range expectedTables {
+		var name string
+		err := p.db.QueryRow(
+			"SELECT name FROM sqlite_master WHERE type='table' AND name=?", table,
+		).Scan(&name)
+		if err != nil {
+			t.Errorf("table %s does not exist after migration: %v", table, err)
+		}
+	}
+}
+
+func TestMigrate_DefaultAccountCreated(t *testing.T) {
+	p := newTestPlugin(t)
+
+	var name, accountType string
+	err := p.db.QueryRow("SELECT name, type FROM accounts WHERE id = 1").Scan(&name, &accountType)
+	if err != nil {
+		t.Fatalf("default account not found: %v", err)
+	}
+	if name != "Main Account" || accountType != "checking" {
+		t.Errorf("unexpected default account: name=%s type=%s", name, accountType)
+	}
+}
+
+func TestMigrate_IdempotentExecution(t *testing.T) {
+	p := &FinancePlugin{}
+	dbPath := filepath.Join(t.TempDir(), "test_idempotent.db")
+
+	if err := p.Migrate(dbPath); err != nil {
+		t.Fatalf("first Migrate failed: %v", err)
+	}
+	p.Teardown()
+
+	p2 := &FinancePlugin{}
+	if err := p2.Migrate(dbPath); err != nil {
+		t.Fatalf("second Migrate failed: %v", err)
+	}
+	defer p2.Teardown()
+
+	var count int
+	if err := p2.db.QueryRow("SELECT COUNT(*) FROM _migrations").Scan(&count); err != nil {
+		t.Fatalf("query migrations count failed: %v", err)
+	}
+	if count != 2 {
+		t.Errorf("expected 2 migrations recorded, got %d", count)
+	}
+}
+
+func TestMigrate_MigrationTrackingTable(t *testing.T) {
+	p := newTestPlugin(t)
+
+	rows, err := p.db.Query("SELECT filename FROM _migrations ORDER BY filename")
+	if err != nil {
+		t.Fatalf("failed to query _migrations: %v", err)
+	}
+	defer rows.Close()
+
+	var filenames []string
+	for rows.Next() {
+		var f string
+		if err := rows.Scan(&f); err != nil {
+			t.Fatalf("failed to scan filename: %v", err)
+		}
+		filenames = append(filenames, f)
+	}
+
+	if len(filenames) != 2 {
+		t.Fatalf("expected 2 migration records, got %d: %v", len(filenames), filenames)
+	}
+	if filenames[0] != "001_init.sql" || filenames[1] != "002_enhanced.sql" {
+		t.Errorf("unexpected migration filenames: %v", filenames)
+	}
+}
+
+func TestMigrate_TransactionsHaveAccountIDDefault(t *testing.T) {
+	p := newTestPlugin(t)
+
+	// Create a transaction with the old format (no account_id specified).
+	_, err := p.db.Exec(
+		"INSERT INTO transactions (amount, type, category, description, date) VALUES (?, ?, ?, ?, ?)",
+		100.0, "expense", "groceries", "test", "2026-02-01",
+	)
+	if err != nil {
+		t.Fatalf("insert without account_id failed: %v", err)
+	}
+
+	// Verify the default account_id is 1.
+	var accountID int
+	if err := p.db.QueryRow("SELECT account_id FROM transactions WHERE id = 1").Scan(&accountID); err != nil {
+		t.Fatalf("failed to read account_id: %v", err)
+	}
+	if accountID != 1 {
+		t.Errorf("expected default account_id=1, got %d", accountID)
+	}
+}
+
+func TestMigrate_V2Indexes(t *testing.T) {
+	p := newTestPlugin(t)
+
+	expectedIndexes := []string{
+		"idx_transactions_account",
+		"idx_transactions_category",
+		"idx_recurring_rules_active",
+		"idx_budgets_month",
+		"idx_investments_type",
+	}
+	for _, idx := range expectedIndexes {
+		var name string
+		err := p.db.QueryRow(
+			"SELECT name FROM sqlite_master WHERE type='index' AND name=?", idx,
+		).Scan(&name)
+		if err != nil {
+			t.Errorf("index %s does not exist after migration: %v", idx, err)
+		}
+	}
+}

@@ -11,6 +11,7 @@ import (
 	_ "modernc.org/sqlite"
 
 	"github.com/alvarotorresc/cortex/pkg/sdk"
+	"github.com/alvarotorresc/cortex/plugins/finance-tracker/backend/shared"
 )
 
 //go:embed migrations/*.sql
@@ -34,26 +35,60 @@ func (p *FinancePlugin) GetManifest() (*sdk.Manifest, error) {
 	}, nil
 }
 
-// Migrate opens the SQLite database and runs embedded SQL migrations.
+// Migrate opens the SQLite database and runs all embedded SQL migrations in
+// order, tracking which ones have been applied to ensure idempotency.
 func (p *FinancePlugin) Migrate(databasePath string) error {
-	database, err := sql.Open("sqlite", databasePath)
+	db, err := shared.OpenDatabase(databasePath)
 	if err != nil {
-		return fmt.Errorf("opening database: %w", err)
+		return err
 	}
-	p.db = database
+	p.db = db
 
-	// Enable WAL mode for better concurrent read performance.
-	if _, err := p.db.Exec("PRAGMA journal_mode=WAL"); err != nil {
-		return fmt.Errorf("enabling WAL mode: %w", err)
+	// Create migrations tracking table.
+	if _, err := p.db.Exec(`
+		CREATE TABLE IF NOT EXISTS _migrations (
+			filename TEXT PRIMARY KEY,
+			applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)
+	`); err != nil {
+		return fmt.Errorf("creating migrations table: %w", err)
 	}
 
-	migrationSQL, err := migrations.ReadFile("migrations/001_init.sql")
+	entries, err := migrations.ReadDir("migrations")
 	if err != nil {
-		return fmt.Errorf("reading migration: %w", err)
+		return fmt.Errorf("reading migrations dir: %w", err)
 	}
 
-	if _, err := p.db.Exec(string(migrationSQL)); err != nil {
-		return fmt.Errorf("running migration: %w", err)
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+
+		// Skip if already applied.
+		var count int
+		if err := p.db.QueryRow(
+			"SELECT COUNT(*) FROM _migrations WHERE filename = ?", entry.Name(),
+		).Scan(&count); err != nil {
+			return fmt.Errorf("checking migration %s: %w", entry.Name(), err)
+		}
+		if count > 0 {
+			continue
+		}
+
+		migrationSQL, err := migrations.ReadFile("migrations/" + entry.Name())
+		if err != nil {
+			return fmt.Errorf("reading migration %s: %w", entry.Name(), err)
+		}
+
+		if _, err := p.db.Exec(string(migrationSQL)); err != nil {
+			return fmt.Errorf("running migration %s: %w", entry.Name(), err)
+		}
+
+		if _, err := p.db.Exec(
+			"INSERT INTO _migrations (filename) VALUES (?)", entry.Name(),
+		); err != nil {
+			return fmt.Errorf("recording migration %s: %w", entry.Name(), err)
+		}
 	}
 
 	return nil
