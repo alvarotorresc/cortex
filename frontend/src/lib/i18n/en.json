@@ -31,6 +31,15 @@
   },
   "finance": {
     "title": "Finance Tracker",
+    "tabs": {
+      "overview": "Overview",
+      "transactions": "Transactions",
+      "budgets": "Budgets",
+      "goals": "Goals",
+      "investments": "Investments"
+    },
+    "settings": "Settings",
+    "closeSettings": "Close settings",
     "addTransaction": "Add Transaction",
     "amount": "Amount",
     "type": "Type",

@@ -31,6 +31,15 @@
   },
   "finance": {
     "title": "Finanzas",
+    "tabs": {
+      "overview": "Resumen",
+      "transactions": "Transacciones",
+      "budgets": "Presupuestos",
+      "goals": "Metas",
+      "investments": "Inversiones"
+    },
+    "settings": "Ajustes",
+    "closeSettings": "Cerrar ajustes",
     "addTransaction": "Agregar transaccion",
     "amount": "Cantidad",
     "type": "Tipo",
