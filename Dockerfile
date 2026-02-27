@@ -24,6 +24,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o /out/cortex ./cmd/cortex
 # Build plugin binaries
 RUN CGO_ENABLED=0 GOOS=linux go build -o /out/plugins/finance-tracker/plugin ./plugins/finance-tracker/backend/
 RUN CGO_ENABLED=0 GOOS=linux go build -o /out/plugins/quick-notes/plugin ./plugins/quick-notes/backend/
+RUN CGO_ENABLED=0 GOOS=linux go build -o /out/plugins/project-hub/plugin ./plugins/project-hub/backend/
 
 # ============================================================================
 # Stage 2: Build Frontend (SvelteKit with adapter-static)
@@ -61,10 +62,12 @@ COPY --from=go-builder /out/cortex /app/cortex
 # Copy plugin binaries
 COPY --from=go-builder /out/plugins/finance-tracker/plugin /plugins/finance-tracker/plugin
 COPY --from=go-builder /out/plugins/quick-notes/plugin /plugins/quick-notes/plugin
+COPY --from=go-builder /out/plugins/project-hub/plugin /plugins/project-hub/plugin
 
 # Copy plugin manifests (migrations are embedded in plugin binaries via go:embed)
 COPY plugins/finance-tracker/manifest.json /plugins/finance-tracker/manifest.json
 COPY plugins/quick-notes/manifest.json /plugins/quick-notes/manifest.json
+COPY plugins/project-hub/manifest.json /plugins/project-hub/manifest.json
 
 # Copy frontend build output
 COPY --from=frontend-builder /src/frontend/build /frontend
