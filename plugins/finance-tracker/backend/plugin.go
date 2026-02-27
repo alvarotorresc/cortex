@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -11,6 +12,16 @@ import (
 	_ "modernc.org/sqlite"
 
 	"github.com/alvarotorresc/cortex/pkg/sdk"
+	"github.com/alvarotorresc/cortex/plugins/finance-tracker/backend/accounts"
+	"github.com/alvarotorresc/cortex/plugins/finance-tracker/backend/budgets"
+	"github.com/alvarotorresc/cortex/plugins/finance-tracker/backend/categories"
+	"github.com/alvarotorresc/cortex/plugins/finance-tracker/backend/goals"
+	"github.com/alvarotorresc/cortex/plugins/finance-tracker/backend/investments"
+	"github.com/alvarotorresc/cortex/plugins/finance-tracker/backend/recurring"
+	"github.com/alvarotorresc/cortex/plugins/finance-tracker/backend/reports"
+	"github.com/alvarotorresc/cortex/plugins/finance-tracker/backend/shared"
+	"github.com/alvarotorresc/cortex/plugins/finance-tracker/backend/tags"
+	"github.com/alvarotorresc/cortex/plugins/finance-tracker/backend/transactions"
 )
 
 //go:embed migrations/*.sql
@@ -18,7 +29,16 @@ var migrations embed.FS
 
 // FinancePlugin implements sdk.CortexPlugin for personal finance tracking.
 type FinancePlugin struct {
-	db *sql.DB
+	db                  *sql.DB
+	accountsHandler     *accounts.Handler
+	budgetsHandler      *budgets.Handler
+	categoriesHandler   *categories.Handler
+	goalsHandler        *goals.Handler
+	investmentsHandler  *investments.Handler
+	tagsHandler         *tags.Handler
+	transactionsHandler *transactions.Handler
+	recurringHandler    *recurring.Handler
+	reportsHandler      *reports.Handler
 }
 
 // GetManifest returns the plugin's metadata.
@@ -26,35 +46,79 @@ func (p *FinancePlugin) GetManifest() (*sdk.Manifest, error) {
 	return &sdk.Manifest{
 		ID:          "finance-tracker",
 		Name:        "Finance Tracker",
-		Version:     "0.1.0",
-		Description: "Track income and expenses, local and private",
+		Version:     "0.2.0",
+		Description: "Complete personal finance management — accounts, budgets, goals, investments, reports",
 		Icon:        "wallet",
 		Color:       "#10B981",
 		Permissions: []string{"db:read", "db:write"},
 	}, nil
 }
 
-// Migrate opens the SQLite database and runs embedded SQL migrations.
+// Migrate opens the SQLite database and runs all embedded SQL migrations in
+// order, tracking which ones have been applied to ensure idempotency.
 func (p *FinancePlugin) Migrate(databasePath string) error {
-	database, err := sql.Open("sqlite", databasePath)
+	db, err := shared.OpenDatabase(databasePath)
 	if err != nil {
-		return fmt.Errorf("opening database: %w", err)
+		return err
 	}
-	p.db = database
+	p.db = db
 
-	// Enable WAL mode for better concurrent read performance.
-	if _, err := p.db.Exec("PRAGMA journal_mode=WAL"); err != nil {
-		return fmt.Errorf("enabling WAL mode: %w", err)
+	// Create migrations tracking table.
+	if _, err := p.db.Exec(`
+		CREATE TABLE IF NOT EXISTS _migrations (
+			filename TEXT PRIMARY KEY,
+			applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)
+	`); err != nil {
+		return fmt.Errorf("creating migrations table: %w", err)
 	}
 
-	migrationSQL, err := migrations.ReadFile("migrations/001_init.sql")
+	entries, err := migrations.ReadDir("migrations")
 	if err != nil {
-		return fmt.Errorf("reading migration: %w", err)
+		return fmt.Errorf("reading migrations dir: %w", err)
 	}
 
-	if _, err := p.db.Exec(string(migrationSQL)); err != nil {
-		return fmt.Errorf("running migration: %w", err)
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+
+		// Skip if already applied.
+		var count int
+		if err := p.db.QueryRow(
+			"SELECT COUNT(*) FROM _migrations WHERE filename = ?", entry.Name(),
+		).Scan(&count); err != nil {
+			return fmt.Errorf("checking migration %s: %w", entry.Name(), err)
+		}
+		if count > 0 {
+			continue
+		}
+
+		migrationSQL, err := migrations.ReadFile("migrations/" + entry.Name())
+		if err != nil {
+			return fmt.Errorf("reading migration %s: %w", entry.Name(), err)
+		}
+
+		if _, err := p.db.Exec(string(migrationSQL)); err != nil {
+			return fmt.Errorf("running migration %s: %w", entry.Name(), err)
+		}
+
+		if _, err := p.db.Exec(
+			"INSERT INTO _migrations (filename) VALUES (?)", entry.Name(),
+		); err != nil {
+			return fmt.Errorf("recording migration %s: %w", entry.Name(), err)
+		}
 	}
+
+	p.accountsHandler = accounts.NewHandler(p.db)
+	p.budgetsHandler = budgets.NewHandler(p.db)
+	p.categoriesHandler = categories.NewHandler(p.db)
+	p.goalsHandler = goals.NewHandler(p.db)
+	p.investmentsHandler = investments.NewHandler(p.db)
+	p.tagsHandler = tags.NewHandler(p.db)
+	p.transactionsHandler = transactions.NewHandler(p.db)
+	p.recurringHandler = recurring.NewHandler(p.db)
+	p.reportsHandler = reports.NewHandler(p.db)
 
 	return nil
 }
@@ -62,19 +126,55 @@ func (p *FinancePlugin) Migrate(databasePath string) error {
 // HandleAPI routes incoming API requests to the appropriate handler.
 func (p *FinancePlugin) HandleAPI(req *sdk.APIRequest) (*sdk.APIResponse, error) {
 	switch {
-	case req.Method == "GET" && req.Path == "/transactions":
-		return p.listTransactions(req)
-	case req.Method == "POST" && req.Path == "/transactions":
-		return p.createTransaction(req)
-	case req.Method == "DELETE" && strings.HasPrefix(req.Path, "/transactions/"):
-		return p.deleteTransaction(req)
-	case req.Method == "GET" && req.Path == "/categories":
-		return p.listCategories()
+	case strings.HasPrefix(req.Path, "/transactions"):
+		return p.transactionsHandler.Handle(req)
+	case strings.HasPrefix(req.Path, "/categories"):
+		return p.categoriesHandler.Handle(req)
+	case strings.HasPrefix(req.Path, "/reports"):
+		return p.reportsHandler.Handle(req)
+	case strings.HasPrefix(req.Path, "/accounts"):
+		return p.accountsHandler.Handle(req)
+	case strings.HasPrefix(req.Path, "/budgets"):
+		return p.budgetsHandler.Handle(req)
+	case strings.HasPrefix(req.Path, "/goals"):
+		return p.goalsHandler.Handle(req)
+	case strings.HasPrefix(req.Path, "/investments"):
+		return p.investmentsHandler.Handle(req)
+	case strings.HasPrefix(req.Path, "/tags"):
+		return p.tagsHandler.Handle(req)
+	case strings.HasPrefix(req.Path, "/recurring"):
+		return p.recurringHandler.Handle(req)
+	// Legacy: /summary still works (redirects to reports).
 	case req.Method == "GET" && req.Path == "/summary":
-		return p.getSummary(req)
+		req.Path = "/reports/summary"
+		return p.reportsHandler.Handle(req)
 	default:
-		return jsonError(404, "NOT_FOUND", "route not found")
+		return shared.JSONError(shared.NewAppError("NOT_FOUND", "route not found", 404))
 	}
+}
+
+// widgetSparklineEntry represents a single month in the sparkline trend data.
+type widgetSparklineEntry struct {
+	Month   string  `json:"month"`
+	Balance float64 `json:"balance"`
+}
+
+// widgetBudgetProgress represents the global budget progress for the current month.
+type widgetBudgetProgress struct {
+	Amount     float64 `json:"amount"`
+	Spent      float64 `json:"spent"`
+	Remaining  float64 `json:"remaining"`
+	Percentage float64 `json:"percentage"`
+}
+
+// widgetData represents the full dashboard widget response payload.
+type widgetData struct {
+	Income    float64                `json:"income"`
+	Expense   float64                `json:"expense"`
+	Balance   float64                `json:"balance"`
+	Month     string                 `json:"month"`
+	Sparkline []widgetSparklineEntry `json:"sparkline"`
+	Budget    *widgetBudgetProgress  `json:"budget"`
 }
 
 // GetWidgetData returns dashboard widget data for the requested slot.
@@ -83,8 +183,10 @@ func (p *FinancePlugin) GetWidgetData(slot string) ([]byte, error) {
 		return json.Marshal(map[string]interface{}{"data": nil})
 	}
 
-	month := time.Now().Format("2006-01")
+	now := time.Now()
+	month := now.Format("2006-01")
 
+	// Current month income/expense.
 	var income, expense float64
 	row := p.db.QueryRow(
 		`SELECT COALESCE(SUM(CASE WHEN type='income' THEN amount ELSE 0 END), 0),
@@ -96,14 +198,121 @@ func (p *FinancePlugin) GetWidgetData(slot string) ([]byte, error) {
 		return nil, fmt.Errorf("querying monthly totals: %w", err)
 	}
 
-	return json.Marshal(map[string]interface{}{
-		"data": map[string]interface{}{
-			"income":  income,
-			"expense": expense,
-			"balance": income - expense,
-			"month":   month,
-		},
-	})
+	// Sparkline: last 6 months balance trend.
+	sparkline, err := p.getSparkline(now)
+	if err != nil {
+		return nil, fmt.Errorf("querying sparkline: %w", err)
+	}
+
+	// Budget progress: global budget for current month.
+	budget, err := p.getGlobalBudgetProgress(month)
+	if err != nil {
+		return nil, fmt.Errorf("querying budget progress: %w", err)
+	}
+
+	data := widgetData{
+		Income:    income,
+		Expense:   expense,
+		Balance:   income - expense,
+		Month:     month,
+		Sparkline: sparkline,
+		Budget:    budget,
+	}
+
+	return json.Marshal(map[string]interface{}{"data": data})
+}
+
+// getSparkline returns the balance for each of the last 6 months (including current).
+// Months with no transactions are filled with zero balance.
+func (p *FinancePlugin) getSparkline(now time.Time) ([]widgetSparklineEntry, error) {
+	startMonth := now.AddDate(0, -5, 0).Format("2006-01")
+	endMonth := now.Format("2006-01")
+
+	rows, err := p.db.Query(
+		`SELECT substr(date, 1, 7) as month,
+		        COALESCE(SUM(CASE WHEN type='income' THEN amount ELSE 0 END), 0) -
+		        COALESCE(SUM(CASE WHEN type='expense' THEN amount ELSE 0 END), 0) as balance
+		 FROM transactions
+		 WHERE substr(date, 1, 7) >= ? AND substr(date, 1, 7) <= ?
+		 GROUP BY substr(date, 1, 7)
+		 ORDER BY month`,
+		startMonth, endMonth,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	// Collect query results into a map for gap-filling.
+	balanceByMonth := make(map[string]float64)
+	for rows.Next() {
+		var m string
+		var b float64
+		if err := rows.Scan(&m, &b); err != nil {
+			return nil, err
+		}
+		balanceByMonth[m] = b
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Build 6-month array, filling gaps with zero.
+	sparkline := make([]widgetSparklineEntry, 6)
+	for i := 0; i < 6; i++ {
+		m := now.AddDate(0, -(5 - i), 0).Format("2006-01")
+		sparkline[i] = widgetSparklineEntry{
+			Month:   m,
+			Balance: balanceByMonth[m], // defaults to 0 if not in map
+		}
+	}
+
+	return sparkline, nil
+}
+
+// getGlobalBudgetProgress returns the budget progress for the global budget
+// (category IS NULL or empty) that matches the current month or is a recurring
+// budget (month IS NULL or empty). Returns nil if no global budget exists.
+func (p *FinancePlugin) getGlobalBudgetProgress(month string) (*widgetBudgetProgress, error) {
+	var budgetAmount float64
+	err := p.db.QueryRow(
+		`SELECT amount FROM budgets
+		 WHERE (category IS NULL OR category = '')
+		   AND (month = ? OR month = '' OR month IS NULL)
+		 ORDER BY CASE WHEN month = ? THEN 0 ELSE 1 END
+		 LIMIT 1`,
+		month, month,
+	).Scan(&budgetAmount)
+
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil // No global budget exists.
+		}
+		return nil, err
+	}
+
+	// Sum expenses for the current month.
+	var spent float64
+	if err := p.db.QueryRow(
+		`SELECT COALESCE(SUM(amount), 0) FROM transactions
+		 WHERE type = 'expense' AND date LIKE ?`,
+		month+"%",
+	).Scan(&spent); err != nil {
+		return nil, err
+	}
+
+	remaining := budgetAmount - spent
+	var percentage float64
+	if budgetAmount > 0 {
+		percentage = (spent / budgetAmount) * 100
+	}
+
+	return &widgetBudgetProgress{
+		Amount:     budgetAmount,
+		Spent:      spent,
+		Remaining:  remaining,
+		Percentage: percentage,
+	}, nil
 }
 
 // Teardown closes the database connection when the plugin is unloaded.
@@ -112,221 +321,4 @@ func (p *FinancePlugin) Teardown() error {
 		return p.db.Close()
 	}
 	return nil
-}
-
-// --- Data types ---
-
-// Transaction represents a financial transaction record.
-type Transaction struct {
-	ID          int64   `json:"id"`
-	Amount      float64 `json:"amount"`
-	Type        string  `json:"type"`
-	Category    string  `json:"category"`
-	Description string  `json:"description"`
-	Date        string  `json:"date"`
-	CreatedAt   string  `json:"created_at"`
-}
-
-// Category represents a transaction category.
-type Category struct {
-	ID        int64  `json:"id"`
-	Name      string `json:"name"`
-	Icon      string `json:"icon"`
-	IsDefault bool   `json:"is_default"`
-}
-
-// CategorySummary represents aggregated spending per category.
-type CategorySummary struct {
-	Category string  `json:"category"`
-	Total    float64 `json:"total"`
-}
-
-// --- Handlers ---
-
-func (p *FinancePlugin) listTransactions(req *sdk.APIRequest) (*sdk.APIResponse, error) {
-	month := req.Query["month"]
-	if month == "" {
-		month = time.Now().Format("2006-01")
-	}
-
-	rows, err := p.db.Query(
-		`SELECT id, amount, type, category, description, date, created_at
-		 FROM transactions
-		 WHERE date LIKE ?
-		 ORDER BY date DESC, id DESC`,
-		month+"%",
-	)
-	if err != nil {
-		return nil, fmt.Errorf("querying transactions: %w", err)
-	}
-	defer rows.Close()
-
-	transactions := make([]Transaction, 0)
-	for rows.Next() {
-		var t Transaction
-		if err := rows.Scan(&t.ID, &t.Amount, &t.Type, &t.Category, &t.Description, &t.Date, &t.CreatedAt); err != nil {
-			return nil, fmt.Errorf("scanning transaction: %w", err)
-		}
-		transactions = append(transactions, t)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterating transactions: %w", err)
-	}
-
-	return jsonSuccess(200, transactions)
-}
-
-func (p *FinancePlugin) createTransaction(req *sdk.APIRequest) (*sdk.APIResponse, error) {
-	var input struct {
-		Amount      float64 `json:"amount"`
-		Type        string  `json:"type"`
-		Category    string  `json:"category"`
-		Description string  `json:"description"`
-		Date        string  `json:"date"`
-	}
-
-	if err := json.Unmarshal(req.Body, &input); err != nil {
-		return jsonError(400, "VALIDATION_ERROR", "invalid JSON body")
-	}
-
-	// Validate amount
-	if input.Amount <= 0 {
-		return jsonError(400, "VALIDATION_ERROR", "amount must be greater than 0")
-	}
-
-	// Validate type enum
-	if input.Type != "income" && input.Type != "expense" {
-		return jsonError(400, "VALIDATION_ERROR", "type must be 'income' or 'expense'")
-	}
-
-	// Validate category is not empty
-	if strings.TrimSpace(input.Category) == "" {
-		return jsonError(400, "VALIDATION_ERROR", "category is required")
-	}
-
-	// Default date to today
-	if input.Date == "" {
-		input.Date = time.Now().Format("2006-01-02")
-	}
-
-	result, err := p.db.Exec(
-		"INSERT INTO transactions (amount, type, category, description, date) VALUES (?, ?, ?, ?, ?)",
-		input.Amount, input.Type, input.Category, input.Description, input.Date,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("inserting transaction: %w", err)
-	}
-
-	id, _ := result.LastInsertId()
-	return jsonSuccess(201, map[string]interface{}{"id": id})
-}
-
-func (p *FinancePlugin) deleteTransaction(req *sdk.APIRequest) (*sdk.APIResponse, error) {
-	// Extract ID from path: /transactions/{id}
-	parts := strings.Split(strings.TrimPrefix(req.Path, "/"), "/")
-	if len(parts) < 2 || parts[1] == "" {
-		return jsonError(400, "VALIDATION_ERROR", "missing transaction ID")
-	}
-	id := parts[1]
-
-	result, err := p.db.Exec("DELETE FROM transactions WHERE id = ?", id)
-	if err != nil {
-		return nil, fmt.Errorf("deleting transaction: %w", err)
-	}
-
-	rowsAffected, _ := result.RowsAffected()
-	if rowsAffected == 0 {
-		return jsonError(404, "NOT_FOUND", "transaction not found")
-	}
-
-	return jsonSuccess(200, map[string]interface{}{"deleted": id})
-}
-
-func (p *FinancePlugin) listCategories() (*sdk.APIResponse, error) {
-	rows, err := p.db.Query("SELECT id, name, icon, is_default FROM categories ORDER BY is_default DESC, name")
-	if err != nil {
-		return nil, fmt.Errorf("querying categories: %w", err)
-	}
-	defer rows.Close()
-
-	categories := make([]Category, 0)
-	for rows.Next() {
-		var c Category
-		if err := rows.Scan(&c.ID, &c.Name, &c.Icon, &c.IsDefault); err != nil {
-			return nil, fmt.Errorf("scanning category: %w", err)
-		}
-		categories = append(categories, c)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterating categories: %w", err)
-	}
-
-	return jsonSuccess(200, categories)
-}
-
-func (p *FinancePlugin) getSummary(req *sdk.APIRequest) (*sdk.APIResponse, error) {
-	month := req.Query["month"]
-	if month == "" {
-		month = time.Now().Format("2006-01")
-	}
-
-	rows, err := p.db.Query(
-		`SELECT category, SUM(amount) as total
-		 FROM transactions
-		 WHERE type = 'expense' AND date LIKE ?
-		 GROUP BY category
-		 ORDER BY total DESC`,
-		month+"%",
-	)
-	if err != nil {
-		return nil, fmt.Errorf("querying summary: %w", err)
-	}
-	defer rows.Close()
-
-	summaries := make([]CategorySummary, 0)
-	for rows.Next() {
-		var s CategorySummary
-		if err := rows.Scan(&s.Category, &s.Total); err != nil {
-			return nil, fmt.Errorf("scanning summary: %w", err)
-		}
-		summaries = append(summaries, s)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterating summary: %w", err)
-	}
-
-	return jsonSuccess(200, summaries)
-}
-
-// --- JSON response helpers ---
-
-// jsonSuccess wraps data in `{ "data": ... }` format per PATTERNS.md.
-func jsonSuccess(status int, data interface{}) (*sdk.APIResponse, error) {
-	body, err := json.Marshal(map[string]interface{}{"data": data})
-	if err != nil {
-		return nil, fmt.Errorf("marshaling response: %w", err)
-	}
-	return &sdk.APIResponse{
-		StatusCode:  status,
-		Body:        body,
-		ContentType: "application/json",
-	}, nil
-}
-
-// jsonError wraps errors in `{ "error": { "code": ..., "message": ... } }` format per PATTERNS.md.
-func jsonError(status int, code string, message string) (*sdk.APIResponse, error) {
-	body, _ := json.Marshal(map[string]interface{}{
-		"error": map[string]interface{}{
-			"code":    code,
-			"message": message,
-		},
-	})
-	return &sdk.APIResponse{
-		StatusCode:  status,
-		Body:        body,
-		ContentType: "application/json",
-	}, nil
 }

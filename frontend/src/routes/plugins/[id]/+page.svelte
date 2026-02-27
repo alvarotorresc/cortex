@@ -1,7 +1,7 @@
 <script lang="ts">
   import { t } from 'svelte-i18n';
   import Puzzle from 'lucide-svelte/icons/puzzle';
-  import FinancePage from '$lib/components/plugins/FinancePage.svelte';
+  import FinancePage from '$lib/components/plugins/finance/FinancePage.svelte';
   import NotesPage from '$lib/components/plugins/NotesPage.svelte';
   import ProjectHubPage from '$lib/components/plugins/ProjectHubPage.svelte';
 
