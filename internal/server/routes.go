@@ -3,6 +3,9 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -46,15 +49,35 @@ func NewRouter(cfg *config.Config, registry *plugin.Registry, loader *plugin.Loa
 	// Dashboard layout routes (host-level)
 	dashboardRoutes(router, hostDB)
 
-	// Serve plugin frontend assets
-	pluginAssetsDir := http.Dir(cfg.PluginDir)
-	router.Handle("/plugins/*", http.StripPrefix("/plugins/", http.FileServer(pluginAssetsDir)))
-
-	// Serve main frontend (SvelteKit build)
-	frontendDir := http.Dir(cfg.FrontendDir)
-	router.Handle("/*", http.FileServer(frontendDir))
+	// Serve main frontend (SvelteKit SPA with fallback to index.html)
+	router.Handle("/*", spaHandler(cfg.FrontendDir))
 
 	return router
+}
+
+// spaHandler serves static files from the frontend build directory.
+// For any path that doesn't match an existing file, it falls back to index.html
+// so that the SvelteKit client-side router can handle the route.
+func spaHandler(frontendDir string) http.HandlerFunc {
+	fs := http.Dir(frontendDir)
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		path := strings.TrimPrefix(r.URL.Path, "/")
+		if path == "" {
+			path = "index.html"
+		}
+
+		// Check if the requested file exists
+		fullPath := filepath.Join(frontendDir, filepath.Clean("/"+path))
+		if info, err := os.Stat(fullPath); err == nil && !info.IsDir() {
+			http.FileServer(fs).ServeHTTP(w, r)
+			return
+		}
+
+		// Fallback to index.html for SPA routing
+		r.URL.Path = "/"
+		http.FileServer(fs).ServeHTTP(w, r)
+	}
 }
 
 // handleHealth returns the server health status.
