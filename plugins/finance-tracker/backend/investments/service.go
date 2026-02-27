@@ -25,7 +25,7 @@ func (s *Service) List() ([]InvestmentWithPnL, *shared.AppError) {
 
 	result := make([]InvestmentWithPnL, 0, len(investments))
 	for _, inv := range investments {
-		result = append(result, calculatePnL(inv))
+		result = append(result, calculatePnL(&inv))
 	}
 	return result, nil
 }
@@ -78,7 +78,7 @@ func (s *Service) Update(id int64, input *UpdateInvestmentInput) (*InvestmentWit
 		return nil, appErr
 	}
 
-	withPnL := calculatePnL(*inv)
+	withPnL := calculatePnL(inv)
 	return &withPnL, nil
 }
 
@@ -95,8 +95,8 @@ func (s *Service) Delete(id int64) *shared.AppError {
 
 // calculatePnL computes P&L fields for an investment.
 // Only calculates when units, avg_buy_price, AND current_price are all non-nil.
-func calculatePnL(inv Investment) InvestmentWithPnL {
-	result := InvestmentWithPnL{Investment: inv}
+func calculatePnL(inv *Investment) InvestmentWithPnL {
+	result := InvestmentWithPnL{Investment: *inv}
 
 	if inv.Units == nil || inv.AvgBuyPrice == nil || inv.CurrentPrice == nil {
 		return result
