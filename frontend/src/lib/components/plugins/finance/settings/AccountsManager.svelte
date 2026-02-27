@@ -16,6 +16,7 @@
   } from '../types';
   import EmptyState from '../shared/EmptyState.svelte';
   import AmountDisplay from '../shared/AmountDisplay.svelte';
+  import LucideIcon from '../shared/LucideIcon.svelte';
 
   // State
   let accounts = $state<AccountWithBalance[]>([]);
@@ -431,7 +432,7 @@
                 style:background-color="{acct.color}20"
                 aria-hidden="true"
               >
-                {acct.icon}
+                <LucideIcon name={acct.icon} />
               </span>
             {:else}
               <span

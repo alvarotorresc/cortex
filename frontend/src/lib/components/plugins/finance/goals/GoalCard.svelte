@@ -6,6 +6,7 @@
   import type { SavingsGoal } from '../types';
   import ProgressBar from '../shared/ProgressBar.svelte';
   import AmountDisplay from '../shared/AmountDisplay.svelte';
+  import LucideIcon from '../shared/LucideIcon.svelte';
 
   interface Props {
     goal: SavingsGoal;
@@ -100,7 +101,7 @@
       style:background-color="{goal.color}20"
       aria-hidden="true"
     >
-      {goal.icon}
+      <LucideIcon name={goal.icon} />
     </span>
 
     <div class="min-w-0 flex-1">

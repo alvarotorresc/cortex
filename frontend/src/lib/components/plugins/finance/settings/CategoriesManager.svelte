@@ -10,6 +10,7 @@
   import { listCategories, createCategory, updateCategory, deleteCategory } from '../api';
   import type { Category, CategoryType, CreateCategoryInput, UpdateCategoryInput } from '../types';
   import EmptyState from '../shared/EmptyState.svelte';
+  import LucideIcon from '../shared/LucideIcon.svelte';
 
   // State
   let categories = $state<Category[]>([]);
@@ -371,7 +372,7 @@
                 style:background-color="{cat.color}20"
                 aria-hidden="true"
               >
-                {cat.icon}
+                <LucideIcon name={cat.icon} />
               </span>
             {:else}
               <span
